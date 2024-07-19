@@ -1,0 +1,21 @@
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const lib = b.addModule("cpu", .{
+        .optimize = optimize,
+        .target = target,
+        .root_source_file = b.path("src/cpu.zig"),
+    });
+
+    const exe = b.addExecutable(.{
+        .name = "cisc64",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("cpu", lib);
+    b.installArtifact(exe);
+}
