@@ -34,6 +34,28 @@ const Opcode = enum(u8) {
 
 };
 
-program_counter: u64 = 0,
+pub fn init() Self {
+    return .{
+        .pc = 0,
+        .registers = std.mem.zeroes([std.math.maxInt(u8)]Register),
+        .flags = std.mem.zeroes([std.math.maxInt(u8)]Flag),
+    };
+}
+
+pub fn fetchExecuteInstruction(self: *Self, program: []const u8) void {
+    const op: Opcode = @enumFromInt(program[self.pc]);
+    switch (op) {
+        .LDR => {
+            const addr = program[self.pc + 1];
+            const intermediate: *[@divExact(@typeInfo(Register).Int.bits, 8)]u8 = @constCast(@ptrCast(program.ptr+2));
+            const val: Register = @bitCast(intermediate.*);
+            self.registers[addr] = val;
+            self.pc += 9;
+        },
+        else => @panic("Not Implemented")
+    }
+}
+
+pc: u64 = 0,
 registers: [std.math.maxInt(u8)]Register,
 flags: [std.math.maxInt(u8)]Flag,

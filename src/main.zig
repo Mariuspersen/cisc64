@@ -1,7 +1,22 @@
 const std = @import("std");
-const cpu = @import("cpu");
+const Cpu = @import("cpu");
+
+const program = [_]u8{
+    0x01,
+    0x05,
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+};
 
 pub fn main() !void {
-    const value = cpu.hello();
-    _ = &value;
+    var cpu = Cpu.init();
+    cpu.fetchExecuteInstruction(&program);
+    std.debug.print("{any}",.{cpu});
 }
+
