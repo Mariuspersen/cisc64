@@ -1,9 +1,10 @@
 const std = @import("std");
 const testing = std.testing;
+
 const Self = @This();
 
 // THE IDEA //
-// a CISC instruction set with no conditional jumps to tackle speculative execution attacks
+// a RISCV/CISC hybrid instruction set with no conditional jumps to tackle speculative execution attacks
 // In recent times there as been a lot of attacks that target the branch predictor in modern CPU's to extract information
 // The reason these sort of attacks are possible is because modern CPU's are pipelined ( I think )
 // Reducing the need for flushing the pipeline, speculative execution and branch prediction is used
@@ -12,50 +13,79 @@ const Self = @This();
 // What if we instead didnt have conditional jumps?
 // We not longer need a branch predictor and speculative execution becomes just execution.
 
-
 const Flag = u1;
 const Register = u64;
 
-const Opcode = enum(u8) {
-    LDR = 0x01, //Load to register -> LDR $[address(1 byte)] value(4 bytes)
-    LDF = 0x02, //Load to flag -> LDF $[address(1 byte)] value(1 bytes) NOTE: truncated, only first bit is taken
-    ADDRV = 0x03, //Add value to register -> ADDRV $[address of result flag(1 byte)]  $[address of carry flag(1 byte)] value(4 bytes)
-    ADDRR = 0x04, //Add register to register -> ADDRR $[address of result register(1 byte)] $[address value register(1 byte)] $[address of carry flag(1 byte)] 
-    ADDRF = 0x05, //Add flag to register -> ADDRR $[address of result flag(1 byte)]  $[address of carry flag(1 byte)] $[address value register(1 byte)]
-    SUBRV = 0x06, //Subtract value to register -> SUBRV $[address of result flag(1 byte)]  $[address of carry flag(1 byte)] value(4 bytes)
-    SUBRR = 0x07, //Subtract register to register -> SUBRR $[address of result register(1 byte)] $[address value register(1 byte)] $[address of carry flag(1 byte)] 
-    SUBRF = 0x08, //Subtract flag to register -> SUBRF $[address of result flag(1 byte)]  $[address of carry flag(1 byte)] $[address value register(1 byte)]
-    MOVNZ = 0x09, //Move if not zero -> MOVNZ $[address of register(1 byte)] $[address of not zero flag(1 byte)] $[address of register(1 byte)]
-    MOVZ = 0x0A, //Move if zero -> MOVZ $[address of register(1 byte)] $[address of zero flag(1 byte)] $[address of register(1 byte)]
-    SHFTL = 0x0B, //Shift left -> SHFTL $[address of register(1 byte)]
-    SHFTR = 0x0C, //Shift right -> SHFTR $[address of register(1 byte)]
-    TERN = 0x0D, //Ternary, TERN $[address of result register(1 byte)]  $[address of bool flag(1 byte)] $[address of option(1 byte)] $[address of option(1 byte)]
+const Instruction = enum(u16) {
+    HLT = 0x0000,
+    LDVR = 0x0A01, //0x0A01(LDRVR), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
+    LDRR = 0x0202, //0x0002, 0xFF, 0xFF,
 
+    pub fn fetch(program: []const u8) Instruction {
+        const intermediate: *[@divExact(@typeInfo(u16).Int.bits, 8)]u8 = @constCast(@ptrCast(program.ptr));
+        const val: u16 = @bitCast(intermediate.*);
+        return @enumFromInt(val);
+    }
 
+    pub fn len(self: *const Instruction) u8 {
+        const number: u16 = @intFromEnum(self.*);
+        const info = @typeInfo(Instruction);
+        const tag = @typeInfo(info.Enum.tag_type);
+        const length = number >> @divExact(tag.Int.bits, 2);
+        return @intCast(length);
+    }
 };
 
-pub fn init() Self {
-    return .{
-        .pc = 0,
-        .registers = std.mem.zeroes([std.math.maxInt(u8)]Register),
-        .flags = std.mem.zeroes([std.math.maxInt(u8)]Flag),
+pub fn sliceToType(program: []const u8, T: type) T {
+    const info = @typeInfo(T);
+    const len = switch (info) {
+        .Int => |I| I.bits,
+        .Float => |F| F.bits,
+        .Struct => |S| @typeInfo(S.backing_integer.?).Int.bits,
+        .Enum => |E| @typeInfo(E.tag_type).Int.bits,
+        else => @compileError("Stop doing weird things!")
     };
-}
-
-pub fn fetchExecuteInstruction(self: *Self, program: []const u8) void {
-    const op: Opcode = @enumFromInt(program[self.pc]);
-    switch (op) {
-        .LDR => {
-            const addr = program[self.pc + 1];
-            const intermediate: *[@divExact(@typeInfo(Register).Int.bits, 8)]u8 = @constCast(@ptrCast(program.ptr+2));
-            const val: Register = @bitCast(intermediate.*);
-            self.registers[addr] = val;
-            self.pc += 9;
-        },
-        else => @panic("Not Implemented")
-    }
+    const intermediate: *[@divExact(len, 8)]u8 = @constCast(@ptrCast(program.ptr));
+    const val: T = @bitCast(intermediate.*);
+    return val;
 }
 
 pc: u64 = 0,
 registers: [std.math.maxInt(u8)]Register,
-flags: [std.math.maxInt(u8)]Flag,
+program: []const u8,
+
+pub fn init(program: []const u8) Self {
+    return .{
+        .pc = 0,
+        .registers = std.mem.zeroes([std.math.maxInt(u8)]Register),
+        .program = program,
+    };
+}
+
+pub fn fetchExecuteInstruction(self: *Self) void {
+    const ins = Instruction.fetch(self.program[self.pc..]);
+    self.pc += 2;
+    std.debug.print("{any}\n", .{ins});
+    switch (ins) {
+        .HLT => @panic("HALTED!"),
+        .LDVR => {
+            const addr = sliceToType(self.program[self.pc..], u8);
+            self.pc += 1;
+            const value = sliceToType(self.program[self.pc..], u64);
+            self.pc += 8;
+
+            self.registers[addr] = value;
+            std.debug.print("{any} 0x{x}, 0x{x}\n", .{ins,addr,value});
+
+        },
+        .LDRR => {
+            const addr1 = sliceToType(self.program[self.pc..], u8);
+            self.pc += 1;
+            const addr2 = sliceToType(self.program[self.pc..], u8);
+            self.pc += 1;
+
+            self.registers[addr1] = self.registers[addr2];
+            std.debug.assert(self.registers[addr1] == self.registers[addr2]);
+        }
+    }
+}
