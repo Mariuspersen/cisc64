@@ -4,7 +4,7 @@ const testing = std.testing;
 const Self = @This();
 
 // THE IDEA //
-// a RISCV/CISC hybrid instruction set with no conditional jumps to tackle speculative execution attacks
+// a RISC/CISC hybrid instruction set with no conditional jumps to tackle speculative execution attacks
 // In recent times there as been a lot of attacks that target the branch predictor in modern CPU's to extract information
 // The reason these sort of attacks are possible is because modern CPU's are pipelined ( I think )
 // Reducing the need for flushing the pipeline, speculative execution and branch prediction is used
@@ -13,13 +13,40 @@ const Self = @This();
 // What if we instead didnt have conditional jumps?
 // We not longer need a branch predictor and speculative execution becomes just execution.
 
+//Some 3AM thoughts about SIMD-at-home implementations
+//Special addressing mode allowing multiple register addressing bus into a mask
+//Meaning a flag is set, instead of 0x0F addressing that register at that address, it enables select for half of the lower registers
+//Now have two of these 8-Bit to 256 select lines, twice and you have read enable and write enable
+//The lowest amount of registers you can address in this special mode would be 256 / 8
+//Each register would need its own ALU and FPU for arithmatic operations
+
+//Wait is this just a GPU at this point?
+//A General Processing Unit?
+//Hmmmmmm
+
 const Flag = u1;
 const Register = u64;
+pub const Endian = std.builtin.Endian.little;
 
-const Instruction = enum(u16) {
-    HLT = 0x0000,
-    LDVR = 0x0A01, //0x0A01(LDRVR), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
-    LDRR = 0x0202, //0x0002, 0xFF, 0xFF,
+pub const Instruction = enum(u16) {
+    HLT,    
+    MOVV,   //MOVV(Load Value into Register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
+    MOVR,   //MOVR(Load Register into Register), 0xFF(dest), 0xFF(source)
+    JMPV,   //JMPV(Jump with Value), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
+    JMPR,   //JMPR(Jump with Register), 0xFF(Set PC to value in register)
+    MOVNZ,  //MOVNZ(Move If Not Zero), 0xFF(dest), 0xFF(source)
+    MOVZ,   //MOVNZ(Move If Zero), 0xFF(dest), 0xFF(source)
+    INCRNZ, //INCRNZ(Increment Register if Not Zero), 0xFF(Register)
+    DECRNZ, //DECRNZ(Decrement Register if Not Zero), 0xFF(Register)
+    INCRZ,  //INCRZ(Increment Register if Zero), 0xFF(Register)
+    DECRZ,  //DECRZ(Decrement Register if Zero), 0xFF(Register)
+    SUBV,   //SUBV(Subtract value from register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
+    SUBR,   //SUBR(Subtract register from register), 0xFF(Register Address), 0xFF(Register Address)
+    CTLE,   //TLE(Cast to little endian), 0xFF(Register Address)
+    CTBE,   //TLE(Cast to big endian), 0xFF(Register Address) 
+    
+    ADDV = 0x090D,  //0x0906(Add value from register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
+    ADDR = 0x020E,  //0x0906(Add register from register), 0xFF(Register Address), 0xFF(Register Address)
 
     pub fn fetch(program: []const u8) Instruction {
         const intermediate: *[@divExact(@typeInfo(u16).Int.bits, 8)]u8 = @constCast(@ptrCast(program.ptr));
@@ -62,30 +89,42 @@ pub fn init(program: []const u8) Self {
     };
 }
 
+fn fetchNext(self: *Self, T: type) T {
+    const addr = sliceToType(self.program[self.pc..], T);
+    self.pc += @sizeOf(T);
+    return addr;
+}
+
 pub fn fetchExecuteInstruction(self: *Self) void {
     const ins = Instruction.fetch(self.program[self.pc..]);
-    self.pc += 2;
+    self.pc += @sizeOf(@TypeOf(ins));
     std.debug.print("{any}\n", .{ins});
     switch (ins) {
         .HLT => @panic("HALTED!"),
-        .LDVR => {
-            const addr = sliceToType(self.program[self.pc..], u8);
-            self.pc += 1;
-            const value = sliceToType(self.program[self.pc..], u64);
-            self.pc += 8;
-
+        .MOVV => {
+            const addr = self.fetchNext(u8);
+            const value = self.fetchNext(u64);
             self.registers[addr] = value;
-            std.debug.print("{any} 0x{x}, 0x{x}\n", .{ins,addr,value});
-
         },
-        .LDRR => {
-            const addr1 = sliceToType(self.program[self.pc..], u8);
-            self.pc += 1;
-            const addr2 = sliceToType(self.program[self.pc..], u8);
-            self.pc += 1;
-
+        .MOVR => {
+            const addr1 = self.fetchNext(u8);
+            const addr2 = self.fetchNext(u8);
             self.registers[addr1] = self.registers[addr2];
-            std.debug.assert(self.registers[addr1] == self.registers[addr2]);
-        }
+        },
+        .INCRNZ => {
+            const addr = self.fetchNext(u8);
+            if(self.registers[addr] != 0) {
+                self.registers[addr] += 1;
+            }
+        },
+        .JMPV => {
+            const value = self.fetchNext(u64);
+            self.pc = value;
+        },
+        .JMPR => {
+            const addr = self.fetchNext(u8);
+            self.pc = self.registers[addr];
+        },
+        else => @panic("Using unimplemented instruction!")
     }
 }

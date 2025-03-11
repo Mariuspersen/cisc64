@@ -5,11 +5,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "preLaunchTask": "build",
-            "type": "lldb",
+            //"preLaunchTask": "build",
+            "type": "cppdbg",
             "request": "launch",
             "name": "Debug",
-            "stopOnEntry": false,
             "program": "${workspaceFolder}/zig-out/bin/cisc64",
             "args": [],
             "cwd": "${workspaceFolder}"
