@@ -28,22 +28,46 @@ const Flag = u1;
 const Register = u64;
 pub const Endian = std.builtin.Endian.little;
 
+
+
+//Some addresses to registers
+const FLAGS_ADDR = 0x01;
+const ZERO = 0x00;
+const MMU = 0x02;
+
+const FLAGSR = packed struct {
+    EQL: bool,
+    GTR: bool,
+    LWR: bool,
+    ZF: bool,
+    SF: bool,
+    _: u59
+};
+
 pub const Instruction = enum(u16) {
     HLT,    
     MOVV,   //MOVV(Load Value into Register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
     MOVR,   //MOVR(Load Register into Register), 0xFF(dest), 0xFF(source)
     JMPV,   //JMPV(Jump with Value), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
     JMPR,   //JMPR(Jump with Register), 0xFF(Set PC to value in register)
-    MOVNZ,  //MOVNZ(Move If Not Zero), 0xFF(dest), 0xFF(source)
-    MOVZ,   //MOVNZ(Move If Zero), 0xFF(dest), 0xFF(source)
+    MOVVNZ,  //MOVVNZ(Move value If Not Zero), 0xFF(dest), 0xFF(source)
+    MOVVZ,   //MOVVNZ(Move value If Zero), 0xFF(dest), 0xFF(source)
+    MOVRNZ,  //MOVVNZ(Move register If Not Zero), 0xFF(dest), 0xFF(source)
+    MOVRZ,   //MOVVNZ(Move register If Zero), 0xFF(dest), 0xFF(source)
+    MOVVEG,  //MOVVEG(Move value if Flags EQL or Greater is set)
+    CMPR,    //CMPR(Compare Register to Register)
+    CMPV,    //CMPV(Compare Register to value)
+    DECR,   //DECR(Decrement register), 0xFF(Register)
     INCRNZ, //INCRNZ(Increment Register if Not Zero), 0xFF(Register)
     DECRNZ, //DECRNZ(Decrement Register if Not Zero), 0xFF(Register)
     INCRZ,  //INCRZ(Increment Register if Zero), 0xFF(Register)
+    INCR,  //INCRZ(Increment Register), 0xFF(Register)
     DECRZ,  //DECRZ(Decrement Register if Zero), 0xFF(Register)
     SUBV,   //SUBV(Subtract value from register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
     SUBR,   //SUBR(Subtract register from register), 0xFF(Register Address), 0xFF(Register Address)
     CTLE,   //TLE(Cast to little endian), 0xFF(Register Address)
-    CTBE,   //TLE(Cast to big endian), 0xFF(Register Address) 
+    CTBE,   //TLE(Cast to big endian), 0xFF(Register Address),
+    TEST,   //TEST(Tests a register, fills the flags register), 0xFF(Register)
     
     ADDV = 0x090D,  //0x0906(Add value from register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
     ADDR = 0x020E,  //0x0906(Add register from register), 0xFF(Register Address), 0xFF(Register Address)
@@ -89,18 +113,19 @@ pub fn init(program: []const u8) Self {
     };
 }
 
+
 fn fetchNext(self: *Self, T: type) T {
     const addr = sliceToType(self.program[self.pc..], T);
     self.pc += @sizeOf(T);
     return addr;
 }
 
-pub fn fetchExecuteInstruction(self: *Self) void {
+pub fn fetchExecuteInstruction(self: *Self) ?void {
     const ins = Instruction.fetch(self.program[self.pc..]);
     self.pc += @sizeOf(@TypeOf(ins));
     std.debug.print("{any}\n", .{ins});
     switch (ins) {
-        .HLT => @panic("HALTED!"),
+        .HLT => return null,
         .MOVV => {
             const addr = self.fetchNext(u8);
             const value = self.fetchNext(u64);
@@ -117,6 +142,14 @@ pub fn fetchExecuteInstruction(self: *Self) void {
                 self.registers[addr] += 1;
             }
         },
+        .INCR => {
+            const addr = self.fetchNext(u8);
+            self.registers[addr] += 1;
+        },
+        .DECR => {
+            const addr = self.fetchNext(u8);
+            self.registers[addr] -= 1;
+        },
         .JMPV => {
             const value = self.fetchNext(u64);
             self.pc = value;
@@ -124,6 +157,49 @@ pub fn fetchExecuteInstruction(self: *Self) void {
         .JMPR => {
             const addr = self.fetchNext(u8);
             self.pc = self.registers[addr];
+        },
+        .CMPR => {
+            var flags: FLAGSR = @bitCast(self.registers[FLAGS_ADDR]);
+            const addr1 = self.fetchNext(u8);
+            const addr2 = self.fetchNext(u8);
+            flags.EQL = self.registers[addr1] == self.registers[addr2];
+            flags.GTR = self.registers[addr1] > self.registers[addr2];
+            flags.LWR = self.registers[addr1] < self.registers[addr2];
+        },
+        .CMPV => {
+            var flags: FLAGSR = @bitCast(self.registers[FLAGS_ADDR]);
+            const addr = self.fetchNext(u8);
+            const value = self.fetchNext(u64);
+            flags.EQL = self.registers[addr] == value;
+            flags.GTR = self.registers[addr] > value;
+            flags.LWR = self.registers[addr] < value;
+        },
+        .MOVVEG => {
+            var flags: FLAGSR = @bitCast(self.registers[FLAGS_ADDR]);
+            const addr = self.fetchNext(u8);
+            const value = self.fetchNext(u64);
+            if (flags.EQL or flags.GTR) {
+                self.registers[addr] = value;
+            }
+            flags.EQL = false;
+            flags.GTR = false;
+        },
+        .TEST => {
+            var flags: FLAGSR = @bitCast(self.registers[FLAGS_ADDR]);
+            const addr = self.fetchNext(u8);
+            flags.ZF = self.registers[addr] == 0;
+            const T = @TypeOf(self.registers[addr]);
+            const TBits = std.meta.Int(.unsigned, @typeInfo(T).Int.bits);
+            flags.SF = @as(TBits, @bitCast(self.registers[addr])) >> (@bitSizeOf(T) - 1) != 0;
+        },
+        .MOVVZ => {
+            var flags: FLAGSR = @bitCast(self.registers[FLAGS_ADDR]);
+            const addr = self.fetchNext(u8);
+            const value = self.fetchNext(u64);
+            if (flags.ZF) {
+                self.registers[addr] = value;
+            }
+            flags.ZF = false;
         },
         else => @panic("Using unimplemented instruction!")
     }

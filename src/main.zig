@@ -23,20 +23,23 @@ const program = [_]u8{
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
+
+    const file = try std.fs.cwd().openFile("src/test.s", .{});
+    const stat = try file.stat();
+    const content = try file.readToEndAlloc(allocator, stat.size);
+
     var a = assembler.init(allocator);
-    try a.movv(0, 0xFFFFFFFFFFFFFFFF);
-    try a.movv(1, 0xDDDDDDDDDDDDDDDD);
-    try a.movr(2, 0);
-    try a.movr(3, 1);
+    try a.assemblyToMachineCode(content);
 
     std.debug.print("{X}\n", .{a.AL.items});
 
     var cpu = CPU.init(a.AL.items[0..]);
-    cpu.fetchExecuteInstruction();
-    cpu.fetchExecuteInstruction();
-    cpu.fetchExecuteInstruction();
-    cpu.fetchExecuteInstruction();
 
-    std.debug.print("{any}\n",.{cpu});
+    cpu.pc = a.HASH.get(".start").?;
+
+    while (cpu.fetchExecuteInstruction()) |_| {
+        std.debug.print("{any}\n",.{cpu});
+
+    }
 }
 
