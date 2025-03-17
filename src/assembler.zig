@@ -118,23 +118,3 @@ fn writeInt(self: *Self, value: anytype) !void {
     const writer = self.AL.writer();
     try writer.writeInt(@TypeOf(value), value, CPU.Endian);
 }
-
-pub fn movr(self: *Self, dest: u8, src: u8) !void {
-    const writer = self.AL.writer();
-    try self.writeInstruction(.MOVR);
-    try writer.writeByte(dest);
-    try writer.writeByte(src);
-}
-
-pub fn jmpr(self: *Self, reg: u8) !void {
-    const writer = self.AL.writer();
-    try self.writeInstruction(.JMPR);
-    try writer.writeByte(reg);
-}
-
-pub fn cmpv(self: *Self, reg: u8, val: u64) !void {
-    const writer = self.AL.writer();
-    try self.writeInstruction(.CMPV);
-    try writer.writeByte(reg);
-    try self.writeInt(val);
-}
