@@ -26,6 +26,7 @@ pub fn init(allocator: Allocator) Self {
 pub fn assemblyToMachineCode(self: *Self, assembly: []const u8) !void {
     const writer = self.AL.writer();
     var line_it = std.mem.splitAny(u8, assembly, "\n");
+    //const start = assembly.ptr;
 
     while (line_it.next()) |line| {
         if (line.len > 0 and line[0] == '.') {
@@ -35,66 +36,64 @@ pub fn assemblyToMachineCode(self: *Self, assembly: []const u8) !void {
         var tokens_it = std.mem.tokenizeAny(u8, line, " ,\t");
         const insToken = tokens_it.next() orelse return error.NoInstructionOnLine;
         const ins = try instructionFromLine(insToken);
-        const arg1: ?u64 =  if(tokens_it.next()) |token| blk: {
+        const arg1: ?u64 = if (tokens_it.next()) |token| blk: {
             break :blk try std.fmt.parseInt(u64, token, 0);
         } else null;
 
-        const arg2: ?u64 = if (tokens_it.next()) |token| blk: {
+        var unresolvedRef = false;
+        const arg2: ?u64 = if (tokens_it.next()) |token| outer: {
             if (token[0] == '.') {
-                std.debug.print("TOKEN: {s} {d}\n", .{token,writer.context.items.len});
                 const value = self.HASH.get(token) orelse inner: {
                     try self.UnresolvedReferences.append(.{
                         .label = token,
-                        .position = writer.context.items.len,
+                        .position = undefined,
                     });
-                    break :inner 0;
+                    unresolvedRef = true;
+                    break :inner undefined;
                 };
-                break :blk value;
+                break :outer value;
             }
-            break :blk try std.fmt.parseInt(u64, token, 0);
+            break :outer try std.fmt.parseInt(u64, token, 0);
         } else null;
-
+        var offset: usize = 0;
         try self.writeInstruction(ins);
+        offset += @sizeOf(Instruction);
         switch (ins) {
-            .MOVV => {
-                try writer.writeByte(@intCast(arg1 orelse return error.NoArg1));
-                try self.writeInt(arg2 orelse return error.NoArg2);
+            .MOVV, .CMPV, .MOVVZ, .MOVVEG => {
+                const addr = arg1 orelse return error.NoArg1;
+                const val = arg2 orelse return error.NoArg2;
+                try writer.writeByte(@intCast(addr));
+                try self.writeInt(val);
+                offset += @sizeOf(u8);
+
+                if (unresolvedRef) {
+                    const unref = self.UnresolvedReferences.items;
+                    unref[unref.len - 1].position = writer.context.items.len - @sizeOf(u64);
+                }
             },
-            .DECR => {
-                try writer.writeByte(@intCast(arg1 orelse return error.NoArg1));
+            .JMPR, .INCR, .TESTR, .DECR => {
+                const addr = arg1 orelse return error.NoArg1;
+                try writer.writeByte(@intCast(addr));
+                offset += @sizeOf(u8);
             },
-            .CMPV => {
-                try self.cmpv(@intCast(arg1 orelse return error.NoArg1), arg2 orelse return error.NoArg2,);
-            },
-            .MOVVZ => {
-                try writer.writeByte(@intCast(arg1 orelse return error.NoArg1));
-                try self.writeInt(arg2 orelse return error.NoArg2);
-            },
-            .TEST => {
-                try writer.writeByte(@intCast(arg1 orelse return error.NoArg1));
-            },
-            .JMPR => {
-                try writer.writeByte(@intCast(arg1 orelse return error.NoArg1));
-            },
-            .INCR => {
-                try writer.writeByte(@intCast(arg1 orelse return error.NoArg1));
+            .OUTR => {
+                const addr = arg1 orelse return error.NoArg1;
+                const port = arg2 orelse return error.NoArg2;
+                try writer.writeByte(@intCast(addr));
+                try writer.writeByte(@intCast(port));
             },
             .HLT => {},
-            .MOVVEG => {
-                try writer.writeByte(@intCast(arg1 orelse return error.NoArg1));
-                try self.writeInt(arg2 orelse return error.NoArg2);
-            },
             else => |i| {
                 std.debug.print("\n----- {any} -----\n", .{i});
                 @panic("Not Implemented yet!");
-            }
+            },
         }
     }
     for (self.UnresolvedReferences.items) |ref| {
         const addr = self.HASH.get(ref.label) orelse return error.NoLabelWithThatName;
         const T = @TypeOf(ref.position);
         var buffer: [@divExact(@typeInfo(T).Int.bits, 8)]u8 = undefined;
-        std.mem.writeInt(T, &buffer, addr,CPU.Endian);
+        std.mem.writeInt(T, &buffer, addr, CPU.Endian);
         try self.AL.replaceRange(ref.position, buffer.len, &buffer);
     }
 }

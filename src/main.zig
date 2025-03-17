@@ -31,15 +31,11 @@ pub fn main() !void {
     var a = assembler.init(allocator);
     try a.assemblyToMachineCode(content);
 
-    std.debug.print("{X}\n", .{a.AL.items});
-
     var cpu = CPU.init(a.AL.items[0..]);
-
     cpu.pc = a.HASH.get(".start").?;
 
     while (cpu.fetchExecuteInstruction()) |_| {
-        std.debug.print("{any}\n",.{cpu});
-
     }
+    std.debug.print("\n", .{});
 }
 

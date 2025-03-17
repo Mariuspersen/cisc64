@@ -67,10 +67,11 @@ pub const Instruction = enum(u16) {
     SUBR,   //SUBR(Subtract register from register), 0xFF(Register Address), 0xFF(Register Address)
     CTLE,   //TLE(Cast to little endian), 0xFF(Register Address)
     CTBE,   //TLE(Cast to big endian), 0xFF(Register Address),
-    TEST,   //TEST(Tests a register, fills the flags register), 0xFF(Register)
+    TESTR,   //TEST(Tests a register, fills the flags register), 0xFF(Register)
     
-    ADDV = 0x090D,  //0x0906(Add value from register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
-    ADDR = 0x020E,  //0x0906(Add register from register), 0xFF(Register Address), 0xFF(Register Address)
+    ADDV,  //0x0906(Add value from register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
+    ADDR,  //0x0906(Add register from register), 0xFF(Register Address), 0xFF(Register Address)
+    OUTR,   //Out register 0xFF(Register Address) 0xFF(Port(File Descriptor basically))
 
     pub fn fetch(program: []const u8) Instruction {
         const intermediate: *[@divExact(@typeInfo(u16).Int.bits, 8)]u8 = @constCast(@ptrCast(program.ptr));
@@ -121,9 +122,9 @@ fn fetchNext(self: *Self, T: type) T {
 }
 
 pub fn fetchExecuteInstruction(self: *Self) ?void {
+    var flags: *FLAGSR = @ptrCast(&self.registers[FLAGS_ADDR]);
     const ins = Instruction.fetch(self.program[self.pc..]);
     self.pc += @sizeOf(@TypeOf(ins));
-    std.debug.print("{any}\n", .{ins});
     switch (ins) {
         .HLT => return null,
         .MOVV => {
@@ -159,7 +160,6 @@ pub fn fetchExecuteInstruction(self: *Self) ?void {
             self.pc = self.registers[addr];
         },
         .CMPR => {
-            var flags: FLAGSR = @bitCast(self.registers[FLAGS_ADDR]);
             const addr1 = self.fetchNext(u8);
             const addr2 = self.fetchNext(u8);
             flags.EQL = self.registers[addr1] == self.registers[addr2];
@@ -167,7 +167,6 @@ pub fn fetchExecuteInstruction(self: *Self) ?void {
             flags.LWR = self.registers[addr1] < self.registers[addr2];
         },
         .CMPV => {
-            var flags: FLAGSR = @bitCast(self.registers[FLAGS_ADDR]);
             const addr = self.fetchNext(u8);
             const value = self.fetchNext(u64);
             flags.EQL = self.registers[addr] == value;
@@ -175,7 +174,6 @@ pub fn fetchExecuteInstruction(self: *Self) ?void {
             flags.LWR = self.registers[addr] < value;
         },
         .MOVVEG => {
-            var flags: FLAGSR = @bitCast(self.registers[FLAGS_ADDR]);
             const addr = self.fetchNext(u8);
             const value = self.fetchNext(u64);
             if (flags.EQL or flags.GTR) {
@@ -184,8 +182,7 @@ pub fn fetchExecuteInstruction(self: *Self) ?void {
             flags.EQL = false;
             flags.GTR = false;
         },
-        .TEST => {
-            var flags: FLAGSR = @bitCast(self.registers[FLAGS_ADDR]);
+        .TESTR => {
             const addr = self.fetchNext(u8);
             flags.ZF = self.registers[addr] == 0;
             const T = @TypeOf(self.registers[addr]);
@@ -193,13 +190,18 @@ pub fn fetchExecuteInstruction(self: *Self) ?void {
             flags.SF = @as(TBits, @bitCast(self.registers[addr])) >> (@bitSizeOf(T) - 1) != 0;
         },
         .MOVVZ => {
-            var flags: FLAGSR = @bitCast(self.registers[FLAGS_ADDR]);
             const addr = self.fetchNext(u8);
             const value = self.fetchNext(u64);
             if (flags.ZF) {
                 self.registers[addr] = value;
             }
             flags.ZF = false;
+        },
+        .OUTR => {
+            const addr = self.fetchNext(u8);
+            const port = self.fetchNext(u8);
+            const writer = (std.fs.File{ .handle = @intCast(port)}).writer();
+            writer.print("{d}", .{self.registers[addr]}) catch {};
         },
         else => @panic("Using unimplemented instruction!")
     }
