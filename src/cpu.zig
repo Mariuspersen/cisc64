@@ -200,7 +200,11 @@ pub fn fetchExecuteInstruction(self: *Self) ?void {
         .OUTR => {
             const addr = self.fetchNext(u8);
             const port = self.fetchNext(u8);
-            const writer = (std.fs.File{ .handle = @intCast(port)}).writer();
+            const handle = switch (@import("builtin").os.tag) {
+                .windows => std.os.windows.peb().ProcessParameters.hStdOutput,
+                else => @as(i32, @intCast(port))
+            };
+            const writer = (std.fs.File{ .handle = handle}).writer();
             writer.print("{d}", .{self.registers[addr]}) catch {};
         },
         else => @panic("Using unimplemented instruction!")

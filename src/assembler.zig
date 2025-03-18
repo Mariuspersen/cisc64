@@ -25,10 +25,10 @@ pub fn init(allocator: Allocator) Self {
 
 pub fn assemblyToMachineCode(self: *Self, assembly: []const u8) !void {
     const writer = self.AL.writer();
-    var line_it = std.mem.splitAny(u8, assembly, "\n");
-    //const start = assembly.ptr;
-
+    var line_it = std.mem.splitAny(u8, assembly, "\n\r");
+    
     while (line_it.next()) |line| {
+        if (line.len == 0) continue;
         if (line.len > 0 and line[0] == '.') {
             try self.HASH.put(line, writer.context.items.len);
             continue;
