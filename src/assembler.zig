@@ -6,30 +6,45 @@ const Instruction = CPU.Instruction;
 const BackingInt = @typeInfo(Instruction).Enum.tag_type;
 const Self = @This();
 
-const UnrRef = std.ArrayList(struct {
+const Reference = struct {
     label: []const u8,
     position: usize,
-});
+};
+
+const Refs = std.ArrayList(Reference);
 
 AL: std.ArrayList(u8),
-HASH: std.StringArrayHashMap(usize),
-UnresolvedReferences: UnrRef,
+HASH: std.StringHashMap(usize),
+UnresolvedReferences: Refs,
 
 pub fn init(allocator: Allocator) Self {
     return .{
         .AL = std.ArrayList(u8).init(allocator),
-        .HASH = std.StringArrayHashMap(usize).init(allocator),
-        .UnresolvedReferences = UnrRef.init(allocator),
+        .HASH = std.StringHashMap(usize).init(allocator),
+        .UnresolvedReferences = Refs.init(allocator),
     };
 }
 
-pub fn assemblyToMachineCode(self: *Self, assembly: []const u8) !void {
+pub fn deinit(self: *Self) void {
+    self.AL.deinit();
+    self.HASH.deinit();
+    self.UnresolvedReferences.deinit();
+}
+
+var unresolvedRef = false;
+pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []const u8) !void {
     const writer = self.AL.writer();
     var line_it = std.mem.splitAny(u8, assembly, "\n\r");
-    
-    while (line_it.next()) |line| {
+    var line_count: usize = 0;
+
+    while (line_it.next()) |line| : (line_count += 1) {
+        errdefer std.debug.print("{s}:{d}:{d}:\t{s}\n", .{filename,line_count+1,line.len,line});
         if (line.len == 0) continue;
         if (line.len > 0 and line[0] == '.') {
+            try self.HASH.put(line, writer.context.items.len);
+            continue;
+        }
+        if (line.len > 0 and line[0] == '_') {
             try self.HASH.put(line, writer.context.items.len);
             continue;
         }
@@ -37,20 +52,16 @@ pub fn assemblyToMachineCode(self: *Self, assembly: []const u8) !void {
         const insToken = tokens_it.next() orelse return error.NoInstructionOnLine;
         const ins = try instructionFromLine(insToken);
         const arg1: ?u64 = if (tokens_it.next()) |token| blk: {
+            if (token[0] == '_') {
+                const value = try self.checkReference(token);
+                break :blk value;
+            }
             break :blk try std.fmt.parseInt(u64, token, 0);
         } else null;
 
-        var unresolvedRef = false;
         const arg2: ?u64 = if (tokens_it.next()) |token| outer: {
             if (token[0] == '.') {
-                const value = self.HASH.get(token) orelse inner: {
-                    try self.UnresolvedReferences.append(.{
-                        .label = token,
-                        .position = undefined,
-                    });
-                    unresolvedRef = true;
-                    break :inner undefined;
-                };
+                const value = try self.checkReference(token);
                 break :outer value;
             }
             break :outer try std.fmt.parseInt(u64, token, 0);
@@ -59,7 +70,7 @@ pub fn assemblyToMachineCode(self: *Self, assembly: []const u8) !void {
         try self.writeInstruction(ins);
         offset += @sizeOf(Instruction);
         switch (ins) {
-            .MOVV, .CMPV, .MOVVZ, .MOVVEG => {
+            .MOVV, .CMPV, .MOVVZ, .MOVVEG, .MOVVL => {
                 const addr = arg1 orelse return error.NoArg1;
                 const val = arg2 orelse return error.NoArg2;
                 try writer.writeByte(@intCast(addr));
@@ -69,20 +80,25 @@ pub fn assemblyToMachineCode(self: *Self, assembly: []const u8) !void {
                 if (unresolvedRef) {
                     const unref = self.UnresolvedReferences.items;
                     unref[unref.len - 1].position = writer.context.items.len - @sizeOf(u64);
+                    unresolvedRef = !unresolvedRef;
                 }
             },
-            .JMPR, .INCR, .TESTR, .DECR => {
+            .JMPR, .INCR, .TESTR, .DECR, .PUSHR, .POPR => {
                 const addr = arg1 orelse return error.NoArg1;
                 try writer.writeByte(@intCast(addr));
                 offset += @sizeOf(u8);
             },
-            .OUTR => {
+            .CALLV => {
+                const addr = arg1 orelse return error.NoArg1;
+                try self.writeInt(addr);
+            },
+            .OUTR, .SUBR, .ADDR => {
                 const addr = arg1 orelse return error.NoArg1;
                 const port = arg2 orelse return error.NoArg2;
                 try writer.writeByte(@intCast(addr));
                 try writer.writeByte(@intCast(port));
             },
-            .HLT => {},
+            .HLT, .SPI, .RET => {},
             else => |i| {
                 std.debug.print("\n----- {any} -----\n", .{i});
                 @panic("Not Implemented yet!");
@@ -98,10 +114,36 @@ pub fn assemblyToMachineCode(self: *Self, assembly: []const u8) !void {
     }
 }
 
+fn checkReference(self: *Self, token: []const u8) !u64 {
+    return self.HASH.get(token) orelse inner: {
+        try self.UnresolvedReferences.append(.{
+            .label = token,
+            .position = undefined,
+        });
+        unresolvedRef = true;
+        break :inner undefined;
+    };
+}
+
+const NAME_MAX_LEN = blk: {
+    const info = @typeInfo(Instruction);
+    var len = 0;
+    for (info.Enum.fields) |field| {
+        if (field.name.len > len) {
+            len = field.name.len;
+        }
+    }
+    break :blk len;
+};
+
 pub fn instructionFromLine(text: []const u8) !Instruction {
     const info = @typeInfo(Instruction);
+    var buf: [NAME_MAX_LEN]u8 = undefined;
+    for (text, buf[0..text.len]) |c, *d| {
+        d.* = std.ascii.toUpper(c);
+    }
     inline for (info.Enum.fields) |field| {
-        if (std.mem.eql(u8, field.name, text)) {
+        if (std.mem.eql(u8, field.name, buf[0..text.len])) {
             return @field(Instruction, field.name);
         }
     }

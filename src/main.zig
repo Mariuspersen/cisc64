@@ -23,13 +23,24 @@ const program = [_]u8{
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
-    const file = try std.fs.cwd().openFile("src/test.s", .{});
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+
+    _ = args.skip();
+
+    const filename = args.next() orelse return error.NoFileGiven;
+
+    const file = try std.fs.cwd().openFile(filename, .{});
     const stat = try file.stat();
     const content = try file.readToEndAlloc(allocator, stat.size);
+    defer allocator.free(content);
 
     var a = assembler.init(allocator);
-    try a.assemblyToMachineCode(content);
+    defer a.deinit();
+
+    try a.assemblyToMachineCode(filename,content);
 
     var cpu = CPU.init(a.AL.items[0..]);
     cpu.pc = a.HASH.get(".start").?;

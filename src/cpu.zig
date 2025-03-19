@@ -30,10 +30,11 @@ pub const Endian = std.builtin.Endian.little;
 
 
 
-//Some addresses to registers
+//Some addresses to named registers
+const MMU = 0x00;
 const FLAGS_ADDR = 0x01;
-const ZERO = 0x00;
-const MMU = 0x02;
+const SP = 0xFE;
+const Stack = 0xFD;
 
 const FLAGSR = packed struct {
     EQL: bool,
@@ -41,7 +42,8 @@ const FLAGSR = packed struct {
     LWR: bool,
     ZF: bool,
     SF: bool,
-    _: u59
+    SP: bool,
+    _: u58
 };
 
 pub const Instruction = enum(u16) {
@@ -55,6 +57,7 @@ pub const Instruction = enum(u16) {
     MOVRNZ,  //MOVVNZ(Move register If Not Zero), 0xFF(dest), 0xFF(source)
     MOVRZ,   //MOVVNZ(Move register If Zero), 0xFF(dest), 0xFF(source)
     MOVVEG,  //MOVVEG(Move value if Flags EQL or Greater is set)
+    MOVVL,   //MOVVL(Move value if Flags LWR is set)
     CMPR,    //CMPR(Compare Register to Register)
     CMPV,    //CMPV(Compare Register to value)
     DECR,   //DECR(Decrement register), 0xFF(Register)
@@ -72,6 +75,12 @@ pub const Instruction = enum(u16) {
     ADDV,  //0x0906(Add value from register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
     ADDR,  //0x0906(Add register from register), 0xFF(Register Address), 0xFF(Register Address)
     OUTR,   //Out register 0xFF(Register Address) 0xFF(Port(File Descriptor basically))
+    CALLR,
+    CALLV,
+    RET,
+    PUSHR,
+    POPR,
+    SPI,    //SPI - Stack Pointer Init, sets Stack flag
 
     pub fn fetch(program: []const u8) Instruction {
         const intermediate: *[@divExact(@typeInfo(u16).Int.bits, 8)]u8 = @constCast(@ptrCast(program.ptr));
@@ -151,6 +160,16 @@ pub fn fetchExecuteInstruction(self: *Self) ?void {
             const addr = self.fetchNext(u8);
             self.registers[addr] -= 1;
         },
+        .SUBR => {
+            const addr1 = self.fetchNext(u8);
+            const addr2 = self.fetchNext(u8);
+            self.registers[addr1] -= self.registers[addr2];
+        },
+        .ADDR => {
+            const addr1 = self.fetchNext(u8);
+            const addr2 = self.fetchNext(u8);
+            self.registers[addr1] += self.registers[addr2];
+        },
         .JMPV => {
             const value = self.fetchNext(u64);
             self.pc = value;
@@ -182,6 +201,14 @@ pub fn fetchExecuteInstruction(self: *Self) ?void {
             flags.EQL = false;
             flags.GTR = false;
         },
+        .MOVVL => {
+            const addr = self.fetchNext(u8);
+            const value = self.fetchNext(u64);
+            if (flags.LWR) {
+                self.registers[addr] = value;
+            }
+            flags.LWR = false;
+        },
         .TESTR => {
             const addr = self.fetchNext(u8);
             flags.ZF = self.registers[addr] == 0;
@@ -205,7 +232,45 @@ pub fn fetchExecuteInstruction(self: *Self) ?void {
                 else => @as(i32, @intCast(port))
             };
             const writer = (std.fs.File{ .handle = handle}).writer();
-            writer.print("{d}", .{self.registers[addr]}) catch {};
+            writer.print("{d} ", .{self.registers[addr]}) catch {};
+        },
+        .SPI => {
+            self.registers[SP] = Stack;
+            flags.SP = true;
+        },
+        .PUSHR => {
+            const addr = self.fetchNext(u8);
+            const val = self.registers[addr];
+            const offset = self.registers[SP];
+            self.registers[offset] = val;
+            self.registers[SP] -= 1;
+        },
+        .POPR => {
+            self.registers[SP] += 1;
+            const addr = self.fetchNext(u8);
+            const offset = self.registers[SP];
+            const val =  self.registers[offset];
+            self.registers[addr] = val;
+        },
+        .CALLR => {
+            const addr = self.fetchNext(u8);
+            const val = self.registers[addr];
+            self.pc = val;
+            const offset = self.registers[SP];
+            self.registers[offset] = val;
+            self.registers[SP] -= 1;
+        },
+        .CALLV => {
+            const offset = self.registers[SP];
+            const val = self.fetchNext(u64);
+            self.registers[offset] = self.pc;
+            self.registers[SP] -= 1;
+            self.pc = val;
+        },
+        .RET => {
+            self.registers[SP] += 1;
+            const offset = self.registers[SP];
+            self.pc = self.registers[offset];
         },
         else => @panic("Using unimplemented instruction!")
     }
