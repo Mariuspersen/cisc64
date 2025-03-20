@@ -38,31 +38,56 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
     var line_count: usize = 0;
 
     while (line_it.next()) |line| : (line_count += 1) {
-        errdefer std.debug.print("{s}:{d}:{d}:\t{s}\n", .{filename,line_count+1,line.len,line});
+        errdefer std.debug.print("{s}:{d}:{d}:\t{s}\n", .{ filename, line_count + 1, line.len, line });
+        const index = std.mem.indexOfAny(u8, line, "%") orelse continue;
+        if (index != 0) continue;
+        var tokens_it = std.mem.tokenizeAny(u8, line, " \t");
+        const decl= tokens_it.next() orelse return error.NoDecleration;
+        const val = tokens_it.next() orelse return error.NoValueGiven;
+        const parsed = try std.fmt.parseInt(u64, val, 0);
+        try self.HASH.put(decl, parsed);
+    }
+
+    line_it.reset();
+    line_count = 0;
+
+    while (line_it.next()) |line| : (line_count += 1) {
+        errdefer std.debug.print("{s}:{d}:{d}:\t{s}\n", .{ filename, line_count + 1, line.len, line });
         if (line.len == 0) continue;
-        if (line.len > 0 and line[0] == '.') {
-            try self.HASH.put(line, writer.context.items.len);
-            continue;
-        }
-        if (line.len > 0 and line[0] == '_') {
-            try self.HASH.put(line, writer.context.items.len);
-            continue;
+        if (line[0] == '%') continue;
+        if (std.mem.indexOfAny(u8, line, "._")) |i| {
+            if (i == 0) {
+                try self.HASH.put(line, writer.context.items.len);
+                continue;
+            }
         }
         var tokens_it = std.mem.tokenizeAny(u8, line, " ,\t");
         const insToken = tokens_it.next() orelse return error.NoInstructionOnLine;
         const ins = try instructionFromLine(insToken);
         const arg1: ?u64 = if (tokens_it.next()) |token| blk: {
-            if (token[0] == '_') {
-                const value = try self.checkReference(token);
-                break :blk value;
+            switch (token[0]) {
+                '_', '.' => {
+                    const value = try self.checkReference(token);
+                    break :blk value;
+                },
+                '%' => {
+                    break :blk self.HASH.get(token) orelse return error.UndeclaredUsed;
+                },
+                else => {}
             }
             break :blk try std.fmt.parseInt(u64, token, 0);
         } else null;
 
         const arg2: ?u64 = if (tokens_it.next()) |token| outer: {
-            if (token[0] == '.') {
-                const value = try self.checkReference(token);
-                break :outer value;
+            switch (token[0]) {
+                '_', '.' => {
+                    const value = try self.checkReference(token);
+                    break :outer value;
+                },
+                '%' => {
+                    break :outer self.HASH.get(token) orelse return error.UndeclaredUsed;
+                },
+                else => {}
             }
             break :outer try std.fmt.parseInt(u64, token, 0);
         } else null;
@@ -101,7 +126,7 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
             .HLT, .SPI, .RET => {},
             else => |i| {
                 std.debug.print("\n----- {any} -----\n", .{i});
-                @panic("Not Implemented yet!");
+                return error.NotYetImplemented;
             },
         }
     }

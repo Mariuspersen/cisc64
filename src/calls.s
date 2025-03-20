@@ -1,11 +1,17 @@
+%REG1 0x12
+%REG2 0x13
+%STDOUT 0x1
+%STDIN 0x0
+%NUMBER 512
+
 _add
-    addr 0x12, 0x13
+    addr %REG1, %REG2
     ret
 
 .start
     spi
-    movv 0x12, 42
-    movv 0x13, 27
+    movv %REG1, %NUMBER
+    movv %REG2, 27
     callv _add
-    outr 0x12, 0x1
+    outr %REG1, %STDOUT
     hlt

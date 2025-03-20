@@ -81,6 +81,8 @@ pub const Instruction = enum(u16) {
     PUSHR,
     POPR,
     SPI,    //SPI - Stack Pointer Init, sets Stack flag
+    MOVFM, //MOVM(Move value from memory) 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Memory Address)
+    MOVTM, //MOVM(Move value to memory) 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Memory Address)
 
     pub fn fetch(program: []const u8) Instruction {
         const intermediate: *[@divExact(@typeInfo(u16).Int.bits, 8)]u8 = @constCast(@ptrCast(program.ptr));
@@ -114,6 +116,7 @@ pub fn sliceToType(program: []const u8, T: type) T {
 pc: u64 = 0,
 registers: [std.math.maxInt(u8)]Register,
 program: []const u8,
+memory: [1024*1024]u8 = undefined,
 
 pub fn init(program: []const u8) Self {
     return .{
@@ -130,10 +133,13 @@ fn fetchNext(self: *Self, T: type) T {
     return addr;
 }
 
-pub fn fetchExecuteInstruction(self: *Self) ?void {
+pub fn fetchExecuteInstruction(self: *Self) !?void {
     var flags: *FLAGSR = @ptrCast(&self.registers[FLAGS_ADDR]);
     const ins = Instruction.fetch(self.program[self.pc..]);
     self.pc += @sizeOf(@TypeOf(ins));
+    errdefer {
+        std.debug.print("Instruction {any} Program Counter: 0x{X}\n", .{ins,self.pc});
+    }
     switch (ins) {
         .HLT => return null,
         .MOVV => {
@@ -272,6 +278,6 @@ pub fn fetchExecuteInstruction(self: *Self) ?void {
             const offset = self.registers[SP];
             self.pc = self.registers[offset];
         },
-        else => @panic("Using unimplemented instruction!")
+        else => return error.NotYetImplemented,
     }
 }

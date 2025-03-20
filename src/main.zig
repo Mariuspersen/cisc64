@@ -45,7 +45,7 @@ pub fn main() !void {
     var cpu = CPU.init(a.AL.items[0..]);
     cpu.pc = a.HASH.get(".start").?;
 
-    while (cpu.fetchExecuteInstruction()) |_| {
+    while (try cpu.fetchExecuteInstruction()) |_| {
     }
     std.debug.print("\n", .{});
 }
