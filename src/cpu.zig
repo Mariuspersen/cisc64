@@ -37,14 +37,128 @@ const SP = 0xFE;
 const Stack = 0xFD;
 
 const FLAGSR = packed struct {
+    NOP: bool,
     EQL: bool,
     GTR: bool,
     LWR: bool,
     ZF: bool,
     SF: bool,
     SP: bool,
-    _: u58
+    _: u57
 };
+
+//I think in the future the way this sure work is a Instruction is 2 bytes, the first byte is the conditional, 
+//it reads the flags and checks if should or should execute or skip the instruction
+
+//For example maybe 0x0 means no conditional, so it executes the next instruction regardless
+//If the conditional byte is 0x1, which is the eql flag, check the eql flag, if set execute instruction, otherwise skip
+
+const Conditional = packed struct {
+    Z: bool, //Zero
+    E: bool, //Equal
+    G: bool, //Greater
+    L: bool, //Lower
+    C: bool, //Carry
+    S: bool, //Sign
+    O: bool, //Overflow
+};
+
+//This kinda wastes a byte, removed a conditional bit
+const FetchType = enum(u3) {
+    NONE,
+    REGISTER,
+    MEMORY,
+    VALUE,
+};
+
+const OperationType = enum(u6) {
+    //Arithmatic
+    ADD,
+    SUB,
+    INC,
+    DEC,
+    XOR,
+    OR,
+    AND,
+    MUL,
+    DIV,
+    SQRT,
+    SR,
+    SL,
+    //FPU
+    ITF, //Int to float,
+    FTI, //Float to int,
+    FADD,
+    FSUB,
+    FMUL,
+    FDIV,
+    FSQRT,
+    //Logic
+    NOP = 0x0,
+    HLT,
+    MOV,
+    CMP,
+    SPI,
+    RET,
+    POP,
+    CALL,
+    PUSH,
+    TEST,
+    CTLE,
+    CTBE,
+};
+
+const Task = packed struct {
+    FT: FetchType, //Fetch type, value,register,memory
+    OT: OperationType, //What actually is being executed
+};
+
+const _Instruction = packed struct {
+    C: Conditional,
+    T: Task,
+
+    pub fn fromToken(text: []const u8) !_Instruction {
+        const OPInfo = @typeInfo(OperationType);
+        var ins = std.mem.zeroInit(_Instruction, .{});
+        var OTLen: usize = 0;
+        inline for (OPInfo.Enum.fields) |field| {
+            if (std.mem.startsWith(u8, text, field.name)) {
+                ins.T.OT = @field(OperationType, field.name);
+                OTLen = field.name.len;
+            }
+        }
+        if (OTLen == 0) return error.InvalidInstruction;
+        ins.T.FT = switch (text[OTLen]) {
+            'N' => .NONE,
+            'M' => .MEMORY,
+            'R' => .REGISTER,
+            'V' => .VALUE,
+            else => return error.InvalidFetchType
+        };
+        OTLen += 1;
+        for (text[OTLen..]) |c| switch (c) {
+            'Z' => ins.C.Z = true,
+            'E' => ins.C.E = true,
+            'G' => ins.C.G = true,
+            'L' => ins.C.L = true,
+            'C' => ins.C.C = true,
+            'S' => ins.C.S = true,
+            'O' => ins.C.O = true,
+            else => return error.InvalidConditionalFlag
+        };
+        return ins;
+    }
+};
+
+test "Instruction" {
+    _ = try _Instruction.fromToken("HLTVZEGLCSO");
+    _ = try _Instruction.fromToken("ADDRZ");
+    _ = try _Instruction.fromToken("ADDNZ");
+    _ = try _Instruction.fromToken("XORVE");
+}
+
+//With this you can basically make arbitrary instructions
+//I'm sure NOPNZEGLCSO (No Operation with no fetching if Zero, Equal, Greater, Lower, Carry, Sign or Overflow flag is set) will be very useful
 
 pub const Instruction = enum(u16) {
     HLT,    
@@ -57,6 +171,7 @@ pub const Instruction = enum(u16) {
     MOVRNZ,  //MOVVNZ(Move register If Not Zero), 0xFF(dest), 0xFF(source)
     MOVRZ,   //MOVVNZ(Move register If Zero), 0xFF(dest), 0xFF(source)
     MOVVEG,  //MOVVEG(Move value if Flags EQL or Greater is set)
+    MOVVEL,  //MOVVEG(Move value if Flags EQL or LWR is set)
     MOVVL,   //MOVVL(Move value if Flags LWR is set)
     CMPR,    //CMPR(Compare Register to Register)
     CMPV,    //CMPV(Compare Register to value)
@@ -83,6 +198,10 @@ pub const Instruction = enum(u16) {
     SPI,    //SPI - Stack Pointer Init, sets Stack flag
     MOVFM, //MOVM(Move value from memory) 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Memory Address)
     MOVTM, //MOVM(Move value to memory) 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Memory Address)
+    ADDVEL,//ADDVEL(Add Value if Flags EQL or LWR is set)
+    ADDVEG,//ADDVEL(Add Value if Flags EQL or GTR is set)
+    ADDVE, //ADDVE(Add Value if Flags EQL is set)
+    XORR, //XOR Registers, you know what this does
 
     pub fn fetch(program: []const u8) Instruction {
         const intermediate: *[@divExact(@typeInfo(u16).Int.bits, 8)]u8 = @constCast(@ptrCast(program.ptr));
@@ -171,6 +290,11 @@ pub fn fetchExecuteInstruction(self: *Self) !?void {
             const addr2 = self.fetchNext(u8);
             self.registers[addr1] -= self.registers[addr2];
         },
+        .XORR => {
+            const addr1 = self.fetchNext(u8);
+            const addr2 = self.fetchNext(u8);
+            self.registers[addr1] ^= self.registers[addr2];
+        },
         .ADDR => {
             const addr1 = self.fetchNext(u8);
             const addr2 = self.fetchNext(u8);
@@ -204,8 +328,27 @@ pub fn fetchExecuteInstruction(self: *Self) !?void {
             if (flags.EQL or flags.GTR) {
                 self.registers[addr] = value;
             }
-            flags.EQL = false;
-            flags.GTR = false;
+        },
+        .ADDVEL => {
+            const addr = self.fetchNext(u8);
+            const value = self.fetchNext(u64);
+            if (flags.EQL or flags.LWR) {
+                self.registers[addr] += value;
+            }
+        },
+        .ADDVEG => {
+            const addr = self.fetchNext(u8);
+            const value = self.fetchNext(u64);
+            if (flags.EQL or flags.GTR) {
+                self.registers[addr] += value;
+            }
+        },
+        .ADDVE => {
+            const addr = self.fetchNext(u8);
+            const value = self.fetchNext(u64);
+            if (flags.EQL) {
+                self.registers[addr] += value;
+            }
         },
         .MOVVL => {
             const addr = self.fetchNext(u8);
@@ -213,7 +356,6 @@ pub fn fetchExecuteInstruction(self: *Self) !?void {
             if (flags.LWR) {
                 self.registers[addr] = value;
             }
-            flags.LWR = false;
         },
         .TESTR => {
             const addr = self.fetchNext(u8);
@@ -233,12 +375,20 @@ pub fn fetchExecuteInstruction(self: *Self) !?void {
         .OUTR => {
             const addr = self.fetchNext(u8);
             const port = self.fetchNext(u8);
+            const val = self.registers[addr];
             const handle = switch (@import("builtin").os.tag) {
                 .windows => std.os.windows.peb().ProcessParameters.hStdOutput,
                 else => @as(i32, @intCast(port))
             };
+            const info = @typeInfo(Register);
             const writer = (std.fs.File{ .handle = handle}).writer();
-            writer.print("{d} ", .{self.registers[addr]}) catch {};
+            const intermediate: [@divExact(info.Int.bits, 8)]u8 = @bitCast(val);
+            for (intermediate) |value| {
+                if (value == 0) break;
+                try writer.writeByte(value);
+            }
+
+            //writer.print("{d} ", .{self.registers[addr]}) catch {};
         },
         .SPI => {
             self.registers[SP] = Stack;

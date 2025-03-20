@@ -95,7 +95,7 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
         try self.writeInstruction(ins);
         offset += @sizeOf(Instruction);
         switch (ins) {
-            .MOVV, .CMPV, .MOVVZ, .MOVVEG, .MOVVL => {
+            .MOVV, .CMPV, .MOVVZ, .MOVVEG, .MOVVL, .ADDVEL, .ADDVE, .ADDVEG => {
                 const addr = arg1 orelse return error.NoArg1;
                 const val = arg2 orelse return error.NoArg2;
                 try writer.writeByte(@intCast(addr));
@@ -117,7 +117,7 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
                 const addr = arg1 orelse return error.NoArg1;
                 try self.writeInt(addr);
             },
-            .OUTR, .SUBR, .ADDR => {
+            .OUTR, .SUBR, .ADDR, .MOVR, .XORR => {
                 const addr = arg1 orelse return error.NoArg1;
                 const port = arg2 orelse return error.NoArg2;
                 try writer.writeByte(@intCast(addr));
