@@ -235,7 +235,7 @@ pub fn sliceToType(program: []const u8, T: type) T {
 pc: u64 = 0,
 registers: [std.math.maxInt(u8)]Register,
 program: []const u8,
-memory: [1024*1024]u8 = undefined,
+memory: [1024]u64 = undefined,
 
 pub fn init(program: []const u8) Self {
     return .{
@@ -312,8 +312,8 @@ pub fn fetchExecuteInstruction(self: *Self) !?void {
             const addr1 = self.fetchNext(u8);
             const addr2 = self.fetchNext(u8);
             flags.EQL = self.registers[addr1] == self.registers[addr2];
-            flags.GTR = self.registers[addr1] > self.registers[addr2];
-            flags.LWR = self.registers[addr1] < self.registers[addr2];
+            flags.GTR = self.registers[addr1] < self.registers[addr2];
+            flags.LWR = self.registers[addr1] > self.registers[addr2];
         },
         .CMPV => {
             const addr = self.fetchNext(u8);
