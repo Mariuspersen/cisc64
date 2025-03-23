@@ -22,7 +22,7 @@ _intoChar
 
 .start
     spi
-    movv %ARG1, 72
+    movv %ARG1, 1
     callv _intoChar
     outr %RET, %STDOUT
     hlt
