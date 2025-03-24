@@ -31,8 +31,7 @@ pub fn main() !void {
 
     var cpu = CPU.init();
     try cpu.load(wprog.context.items);
-    cpu.pc = a.references.get(".start") orelse return error.Guh;
-    cpu.pc /= 2;
+    cpu.pc = a.start;
 
     while (try cpu.fetchDecodeExecute()) |_| {
     }

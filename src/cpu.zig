@@ -72,6 +72,7 @@ const FT = enum(u2) {
 };
 
 const OP = enum(u6) {
+    HLT,
     NOP,
     ADD,
     SUB,
@@ -93,7 +94,6 @@ const OP = enum(u6) {
     FDIV,
     FSQRT,
     JMP,
-    HLT,
     MOV,
     CMP,
     SPI,
@@ -189,7 +189,6 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
     //Fetch
     const bundle = Instruction.fetch(self.memory[self.pc]);
     var flags: *FLAGSR = @ptrCast(&self.registers[FLAGS_ADDR]);
-    _ = &flags;
     //Decode
     for (bundle) |instruction| {
         errdefer std.debug.print("{any}\n", .{instruction});
@@ -197,7 +196,21 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
         const source = instruction.source;
         const flagConditions: u8 = @truncate(self.registers[FLAGS_ADDR]);
         const insConditions: u8 = @bitCast(instruction.condition);
-        if (flagConditions & insConditions == 0 and insConditions != 0) continue;
+        
+        const r = flagConditions & insConditions > 0;
+        const c = insConditions != 0;
+
+        switch (instruction.task.operation) {
+            else => if (r and c) {} else if (r or c) continue,
+            .JMP => if (insConditions == 0) @breakpoint()
+        }
+        
+        const src: u64 = switch (instruction.task.fetch) {
+            .MEMORY => self.memory[self.registers[dest]],
+            .NONE => 0,
+            .REGISTER => self.registers[dest],
+            .VALUE => dest,
+        };
         const val: u64 = switch (instruction.task.fetch) {
             .MEMORY => self.memory[self.registers[source]],
             .NONE => 0,
@@ -241,8 +254,8 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
             },
             .CMP => {
                 flags.equal = self.registers[dest] == val;
-                flags.greater = self.registers[dest] < val;
-                flags.lower = self.registers[dest] > val;
+                flags.greater = self.registers[dest] > val;
+                flags.lower = self.registers[dest] < val;
             },
             .DEC => {
                 self.registers[dest] -= 1;
@@ -294,7 +307,7 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                 self.registers[dest] = @bitCast(valF);
             },
             .JMP => {
-                self.pc = val;
+                self.pc = src;
                 return;
             },
             .MOV => {
@@ -328,7 +341,7 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
             },
             .PUSH => {
                 const offset = self.registers[SP];
-                self.registers[offset] = val;
+                self.registers[offset] = src;
                 self.registers[SP] -= 1;
             },
             .RET => {
