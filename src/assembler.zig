@@ -6,46 +6,51 @@ const Instruction = CPU.Instruction;
 const BackingInt = @typeInfo(Instruction).Enum.tag_type;
 const Self = @This();
 
-const Reference = struct {
+const Unresolved = struct {
     label: []const u8,
     position: usize,
 };
 
-const Refs = std.ArrayList(Reference);
+const Unresolvables = std.ArrayList(Unresolved);
+const Instructions = std.ArrayList(Instruction);
+const References = std.StringHashMap(usize);
 
-AL: std.ArrayList(u8),
-HASH: std.StringHashMap(usize),
-UnresolvedReferences: Refs,
+instructions: Instructions,
+references: References,
+unresolved: Unresolvables,
 
 pub fn init(allocator: Allocator) Self {
     return .{
-        .AL = std.ArrayList(u8).init(allocator),
-        .HASH = std.StringHashMap(usize).init(allocator),
-        .UnresolvedReferences = Refs.init(allocator),
+        .instructions = Instructions.init(allocator),
+        .references = References.init(allocator),
+        .unresolved = Unresolvables.init(allocator),
     };
 }
 
 pub fn deinit(self: *Self) void {
-    self.AL.deinit();
-    self.HASH.deinit();
-    self.UnresolvedReferences.deinit();
+    self.instructions.deinit();
+    self.references.deinit();
+    self.unresolved.deinit();
 }
 
 var unresolvedRef = false;
 pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []const u8) !void {
-    const writer = self.AL.writer();
     var line_it = std.mem.splitAny(u8, assembly, "\n\r");
     var line_count: usize = 0;
 
-    while (line_it.next()) |line| : (line_count += 1) {
-        errdefer std.debug.print("{s}:{d}:{d}:\t{s}\n", .{ filename, line_count + 1, line.len, line });
-        const index = std.mem.indexOfAny(u8, line, "%") orelse continue;
-        if (index != 0) continue;
-        var tokens_it = std.mem.tokenizeAny(u8, line, " \t");
-        const decl= tokens_it.next() orelse return error.NoDecleration;
-        const val = tokens_it.next() orelse return error.NoValueGiven;
-        const parsed = try std.fmt.parseInt(u64, val, 0);
-        try self.HASH.put(decl, parsed);
+    if (std.mem.indexOf(u8, assembly, ".data")) |i| {
+        line_it.index = i;
+        _ = line_it.next();
+        while (line_it.next()) |line| : (line_count += 1) {
+            if (line.len == 0) break;
+            var tokens = std.mem.tokenizeAny(u8, line, " \t");
+            const decl = tokens.next() orelse return error.DataNoDecl;
+            const val = tokens.next() orelse return error.DataNoDecl;
+            const number = try std.fmt.parseInt(u64, val, 0);
+            try self.references.put(decl, self.instructions.items.len);
+            const memory: [2]Instruction = @bitCast(number);
+            for (memory) |value| try self.instructions.append(value);
+        }
     }
 
     line_it.reset();
@@ -53,95 +58,97 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
 
     while (line_it.next()) |line| : (line_count += 1) {
         errdefer std.debug.print("{s}:{d}:{d}:\t{s}\n", .{ filename, line_count + 1, line.len, line });
+        if (std.mem.startsWith(u8, line, ".data")) {
+            while (line_it.next()) |l| {
+                if (l.len == 0) break;
+            }
+        }
+        const index = std.mem.indexOfAny(u8, line, "%") orelse continue;
+        if (index != 0) continue;
+        var tokens_it = std.mem.tokenizeAny(u8, line, " \t");
+        const decl = tokens_it.next() orelse return error.NoDecleration;
+        const val = tokens_it.next() orelse return error.NoValueGiven;
+        const parsed = try std.fmt.parseInt(u8, val, 0);
+        try self.references.put(decl, parsed);
+    }
+
+    line_it.reset();
+    line_count = 0;
+
+    while (line_it.next()) |line| : (line_count += 1) {
+        if (std.mem.startsWith(u8, line, ".data")) {
+            while (line_it.next()) |l| {
+                if (l.len == 0) break;
+            }
+        }
+        errdefer std.debug.print("{s}:{d}:{d}:\t{s}\n", .{ filename, line_count + 1, line.len, line });
+        const index = std.mem.indexOfAny(u8, line, "._") orelse continue;
+        if (index != 0) continue;
+        var tokens_it = std.mem.tokenizeAny(u8, line, " \t");
+        const decl = tokens_it.next() orelse return error.NoDecleration;
+        if (self.instructions.items.len % 2 != 0) {
+            try self.instructions.append(try Instruction.fromToken("NOP", 0, 0));
+        }
+        try self.references.put(decl, @intCast(self.instructions.items.len));
+    }
+
+    line_it.reset();
+    line_count = 0;
+
+    while (line_it.next()) |line| : (line_count += 1) {
+        errdefer std.debug.print("{s}:{d}:{d}:\t{s}\n", .{ filename, line_count + 1, line.len, line });
+        if (std.mem.startsWith(u8, line, ".data")) {
+            while (line_it.next()) |l| {
+                if (l.len == 0) break;
+            }
+        }
         if (line.len == 0) continue;
         if (line[0] == '%') continue;
         if (std.mem.indexOfAny(u8, line, "._")) |i| {
             if (i == 0) {
-                try self.HASH.put(line, writer.context.items.len);
+                try self.references.put(line, @intCast(self.instructions.items.len));
                 continue;
             }
         }
         var tokens_it = std.mem.tokenizeAny(u8, line, " ,\t");
-        const insToken = tokens_it.next() orelse return error.NoInstructionOnLine;
-        const ins = try instructionFromLine(insToken);
-        const arg1: ?u64 = if (tokens_it.next()) |token| blk: {
+        const text = tokens_it.next() orelse return error.NoInstructionOnLine;
+
+        const dest = blk: {
+            const token = tokens_it.next() orelse "0";
             switch (token[0]) {
                 '_', '.' => {
                     const value = try self.checkReference(token);
                     break :blk value;
                 },
                 '%' => {
-                    break :blk self.HASH.get(token) orelse return error.UndeclaredUsed;
+                    break :blk self.references.get(token) orelse return error.UndeclaredUsed;
                 },
-                else => {}
+                else => {},
             }
-            break :blk try std.fmt.parseInt(u64, token, 0);
-        } else null;
-
-        const arg2: ?u64 = if (tokens_it.next()) |token| outer: {
+            break :blk try std.fmt.parseInt(u8, token, 0);
+        };
+        const source = blk: {
+            const token = tokens_it.next() orelse "0";
             switch (token[0]) {
-                '_', '.' => {
+                '_', '.', '&' => {
                     const value = try self.checkReference(token);
-                    break :outer value;
+                    break :blk value;
                 },
                 '%' => {
-                    break :outer self.HASH.get(token) orelse return error.UndeclaredUsed;
+                    break :blk self.references.get(token) orelse return error.UndeclaredUsed;
                 },
-                else => {}
+                else => {},
             }
-            break :outer try std.fmt.parseInt(u64, token, 0);
-        } else null;
-        var offset: usize = 0;
-        try self.writeInstruction(ins);
-        offset += @sizeOf(Instruction);
-        switch (ins) {
-            .MOVV, .CMPV, .MOVVZ, .MOVVEG, .MOVVL, .ADDVEL, .ADDVE, .ADDVEG => {
-                const addr = arg1 orelse return error.NoArg1;
-                const val = arg2 orelse return error.NoArg2;
-                try writer.writeByte(@intCast(addr));
-                try self.writeInt(val);
-                offset += @sizeOf(u8);
-
-                if (unresolvedRef) {
-                    const unref = self.UnresolvedReferences.items;
-                    unref[unref.len - 1].position = writer.context.items.len - @sizeOf(u64);
-                    unresolvedRef = !unresolvedRef;
-                }
-            },
-            .JMPR, .INCR, .TESTR, .DECR, .PUSHR, .POPR => {
-                const addr = arg1 orelse return error.NoArg1;
-                try writer.writeByte(@intCast(addr));
-                offset += @sizeOf(u8);
-            },
-            .CALLV => {
-                const addr = arg1 orelse return error.NoArg1;
-                try self.writeInt(addr);
-            },
-            .OUTR, .SUBR, .ADDR, .MOVR, .XORR => {
-                const addr = arg1 orelse return error.NoArg1;
-                const port = arg2 orelse return error.NoArg2;
-                try writer.writeByte(@intCast(addr));
-                try writer.writeByte(@intCast(port));
-            },
-            .HLT, .SPI, .RET => {},
-            else => |i| {
-                std.debug.print("\n----- {any} -----\n", .{i});
-                return error.NotYetImplemented;
-            },
-        }
-    }
-    for (self.UnresolvedReferences.items) |ref| {
-        const addr = self.HASH.get(ref.label) orelse return error.NoLabelWithThatName;
-        const T = @TypeOf(ref.position);
-        var buffer: [@divExact(@typeInfo(T).Int.bits, 8)]u8 = undefined;
-        std.mem.writeInt(T, &buffer, addr, CPU.Endian);
-        try self.AL.replaceRange(ref.position, buffer.len, &buffer);
+            break :blk try std.fmt.parseInt(u8, token, 0);
+        };
+        const instruction = try Instruction.fromToken(text, @intCast(dest), @intCast(source));
+        try self.instructions.append(instruction);
     }
 }
 
-fn checkReference(self: *Self, token: []const u8) !u64 {
-    return self.HASH.get(token) orelse inner: {
-        try self.UnresolvedReferences.append(.{
+fn checkReference(self: *Self, token: []const u8) !usize {
+    return self.references.get(token) orelse inner: {
+        try self.unresolved.append(.{
             .label = token,
             .position = undefined,
         });
@@ -176,12 +183,6 @@ pub fn instructionFromLine(text: []const u8) !Instruction {
     return error.NotAValidInstruction;
 }
 
-fn writeInstruction(self: *Self, ins: Instruction) !void {
-    const writer = self.AL.writer();
-    try writer.writeInt(BackingInt, @intFromEnum(ins), CPU.Endian);
-}
-
-fn writeInt(self: *Self, value: anytype) !void {
-    const writer = self.AL.writer();
-    try writer.writeInt(@TypeOf(value), value, CPU.Endian);
+pub fn writeInstructions(self: *Self, writer: anytype) !void {
+    for (self.instructions.items) |ins| try writer.writeStruct(ins);
 }

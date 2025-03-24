@@ -17,3 +17,4 @@ JMPR	0x12
 .end
 OUTR    0x11, 0x1
 HLT
+hlt

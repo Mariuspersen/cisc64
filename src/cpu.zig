@@ -30,9 +30,9 @@ pub const Endian = std.builtin.Endian.little;
 
 //Some addresses to named registers
 const MMU = 0x00;
-const FLAGS_ADDR = 0x01;
-const SP = 0xFE;
-const Stack = 0xFD;
+const FLAGS_ADDR = 0xFE;
+const SP = 0xFD;
+const Stack = 0xFC;
 
 const FLAGSR = packed struct {
     zero: bool,
@@ -108,6 +108,7 @@ const OP = enum(u6) {
     BTS, // Bit Test and Set
     BTR, // Bit Test and Reset
     XCHG, // Exchange values of two registers
+    OUT,
 };
 
 const Task = packed struct {
@@ -115,20 +116,32 @@ const Task = packed struct {
     operation: OP, //What actually is being executed
 };
 
-const _Instruction = packed struct {
+const NAME_MAX_LEN = blk: {
+    const info = @typeInfo(OP);
+    const cinfo = @typeInfo(Conditional);
+    var len = 0;
+    for (info.Enum.fields) |field| {
+        if (field.name.len > len) {
+            len = field.name.len;
+        }
+    }
+    break :blk len + cinfo.Struct.fields.len + 1;
+};
+
+pub const Instruction = packed struct {
     condition: Conditional,
     task: Task,
     destination: u8,
     source: u8,
 
-    pub fn fromToken(text: []const u8, dest: u8, source: u8) !_Instruction {
+    pub fn fromToken(text: []const u8, dest: u8, source: u8) !Instruction {
         const OPInfo = @typeInfo(OP);
-        var ins = std.mem.zeroInit(_Instruction, .{});
+        var ins = std.mem.zeroInit(Instruction, .{});
         ins.destination = dest;
         ins.source = source;
         var OTLen: usize = 0;
-        inline for (OPInfo.Enum.fields) |field| {
-            if (std.mem.startsWith(u8, text, field.name)) {
+        inline for (OPInfo.Enum.fields) |field| {    
+            if (std.ascii.startsWithIgnoreCase(text, field.name)) {
                 ins.task.operation = @field(OP, field.name);
                 OTLen = field.name.len;
             }
@@ -136,10 +149,10 @@ const _Instruction = packed struct {
         if (OTLen == 0) return error.InvalidInstruction;
         if (text.len == OTLen) return ins;
         ins.task.fetch = switch (text[OTLen]) {
-            'N' => .NONE,
-            'M' => .MEMORY,
-            'R' => .REGISTER,
-            'V' => .VALUE,
+            'N', 'n' => .NONE,
+            'M', 'm' => .MEMORY,
+            'R', 'r' => .REGISTER,
+            'V', 'v' => .VALUE,
             else => blk: {
                 OTLen -= 1;
                 break :blk .NONE;
@@ -147,49 +160,39 @@ const _Instruction = packed struct {
         };
         OTLen += 1;
         for (text[OTLen..]) |c| switch (c) {
-            'Z' => ins.condition.zero = true,
-            'E' => ins.condition.equal = true,
-            'G' => ins.condition.greater = true,
-            'L' => ins.condition.lower = true,
-            'C' => ins.condition.carry = true,
-            'S' => ins.condition.sign = true,
-            'O' => ins.condition.overflow = true,
-            'P' => ins.condition.parity = true,
-            else => return error.InvalidConditionalFlag,
+            'Z', 'z' => ins.condition.zero = true,
+            'E', 'e' => ins.condition.equal = true,
+            'G', 'g' => ins.condition.greater = true,
+            'L', 'l' => ins.condition.lower = true,
+            'C', 'c' => ins.condition.carry = true,
+            'S', 's' => ins.condition.sign = true,
+            'O', 'o' => ins.condition.overflow = true,
+            'P', 'p' => ins.condition.parity = true,
+            else => {
+                std.debug.print("{c} is not a valid flag, ignoring...\n", .{c});
+            },
         };
 
         return ins;
     }
 
-    pub fn fetch(value: u64) [2]_Instruction {
+    pub fn fetch(value: u64) [2]Instruction {
         return @bitCast(value);
     }
 
-    pub fn toString(self: *const _Instruction) [@sizeOf(_Instruction)]u8 {
+    pub fn toString(self: *const Instruction) [@sizeOf(Instruction)]u8 {
         return @bitCast(self.*);
     }
 };
 
-test "InstructionAssemblerToBytes" {
-    const ins = try _Instruction.fromToken("HLTVZEGLCSO", 0, 0);
-    std.debug.print("{X}\n", .{ins.toString()});
-}
-
-test "fetchInstructionsFromMemory" {
-    const ins1 = try _Instruction.fromToken("HLTVZEGLCSO", 0, 0);
-    const ins2 = try _Instruction.fromToken("NOP", 0, 0);
-    const doubleins = ins1.toString() ++ ins2.toString();
-    const memory: u64 = @bitCast(doubleins);
-    std.debug.print("{any}\n", .{_Instruction.fetch(memory)});
-}
-
-fn fetchDecodeExecute(self: *Self) !?void {
+pub fn fetchDecodeExecute(self: *Self) !?void {
     //Fetch
-    const bundle = _Instruction.fetch(self.memory[self.pc]);
+    const bundle = Instruction.fetch(self.memory[self.pc]);
     var flags: *FLAGSR = @ptrCast(&self.registers[FLAGS_ADDR]);
     _ = &flags;
     //Decode
     for (bundle) |instruction| {
+        errdefer std.debug.print("{any}\n", .{instruction});
         const dest = instruction.destination;
         const source = instruction.source;
         const flagConditions: u8 = @truncate(self.registers[FLAGS_ADDR]);
@@ -230,10 +233,11 @@ fn fetchDecodeExecute(self: *Self) !?void {
                 }
             },
             .CALL => {
-                self.pc = val;
                 const offset = self.registers[SP];
-                self.registers[offset] = val;
+                self.registers[offset] = self.pc;
                 self.registers[SP] -= 1;
+                self.pc = dest;
+                return;
             },
             .CMP => {
                 flags.equal = self.registers[dest] == val;
@@ -290,7 +294,8 @@ fn fetchDecodeExecute(self: *Self) !?void {
                 self.registers[dest] = @bitCast(valF);
             },
             .JMP => {
-                self.pc = self.registers[val];
+                self.pc = val;
+                return;
             },
             .MOV => {
                 self.registers[dest] = val;
@@ -299,6 +304,19 @@ fn fetchDecodeExecute(self: *Self) !?void {
                 self.registers[dest] *= val;
             },
             .NOP => {},
+            .OUT => {
+                const handle = switch (@import("builtin").os.tag) {
+                    .windows => std.os.windows.peb().ProcessParameters.hStdOutput,
+                    else => @as(i32, @intCast(dest)),
+                };
+                const info = @typeInfo(Register);
+                const writer = (std.fs.File{ .handle = handle }).writer();
+                const intermediate: [@divExact(info.Int.bits, 8)]u8 = @bitCast(val);
+                for (intermediate) |value| {
+                    if (value == 0) break;
+                    try writer.writeByte(value);
+                }
+            },
             .OR => {
                 self.registers[dest] |= val;
             },
@@ -316,7 +334,8 @@ fn fetchDecodeExecute(self: *Self) !?void {
             .RET => {
                 self.registers[SP] += 1;
                 const offset = self.registers[SP];
-                self.pc = self.registers[offset];
+                self.pc = self.registers[offset]+1;
+                return;
             },
             .SL => {
                 self.registers[dest] <<= @intCast(val);
@@ -325,14 +344,14 @@ fn fetchDecodeExecute(self: *Self) !?void {
                 self.registers[SP] = Stack;
                 flags.stack = true;
             },
-            .SQRT => {     
+            .SQRT => {
                 self.registers[dest] = std.math.sqrt(val);
             },
             .SR => {
                 self.registers[dest] >>= @intCast(val);
             },
             .SUB => {
-                 self.registers[dest] -= val;
+                self.registers[dest] -= val;
             },
             .TEST => {
                 flags.zero = val == 0;
@@ -358,291 +377,28 @@ fn fetchDecodeExecute(self: *Self) !?void {
                     .NONE => return error.CantExchangeWithNothing,
                 }
             },
-            else => return error.NotYetImplemented,
+            .XOR => {
+                self.registers[dest] ^= val;
+            }
         }
     }
-}
-
-test "newFetch" {
-    var cpu = Self.init("");
-    const ins1 = try _Instruction.fromToken("ITFV", 0, 7);
-    const ins2 = try _Instruction.fromToken("FADDR", 0, 0);
-    const doubleins = ins1.toString() ++ ins2.toString();
-    cpu.memory[0] = @bitCast(doubleins);
-    _ = try cpu.fetchDecodeExecute();
-    std.debug.print("{d}\n", .{@as(f64, @bitCast(cpu.registers[0]))});
-}
-
-//With this you can basically make arbitrary instructions
-//I'm sure NOPNZEGLCSO (No Operation with no fetching if Zero, Equal, Greater, Lower, Carry, Sign or Overflow flag is set) will be very useful
-
-pub const Instruction = enum(u16) {
-    HLT,
-    MOVV, //MOVV(Load Value into Register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
-    MOVR, //MOVR(Load Register into Register), 0xFF(dest), 0xFF(source)
-    JMPV, //JMPV(Jump with Value), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
-    JMPR, //JMPR(Jump with Register), 0xFF(Set PC to value in register)
-    MOVVNZ, //MOVVNZ(Move value If Not Zero), 0xFF(dest), 0xFF(source)
-    MOVVZ, //MOVVNZ(Move value If Zero), 0xFF(dest), 0xFF(source)
-    MOVRNZ, //MOVVNZ(Move register If Not Zero), 0xFF(dest), 0xFF(source)
-    MOVRZ, //MOVVNZ(Move register If Zero), 0xFF(dest), 0xFF(source)
-    MOVVEG, //MOVVEG(Move value if Flags EQL or Greater is set)
-    MOVVEL, //MOVVEG(Move value if Flags EQL or LWR is set)
-    MOVVL, //MOVVL(Move value if Flags LWR is set)
-    CMPR, //CMPR(Compare Register to Register)
-    CMPV, //CMPV(Compare Register to value)
-    DECR, //DECR(Decrement register), 0xFF(Register)
-    INCRNZ, //INCRNZ(Increment Register if Not Zero), 0xFF(Register)
-    DECRNZ, //DECRNZ(Decrement Register if Not Zero), 0xFF(Register)
-    INCRZ, //INCRZ(Increment Register if Zero), 0xFF(Register)
-    INCR, //INCRZ(Increment Register), 0xFF(Register)
-    DECRZ, //DECRZ(Decrement Register if Zero), 0xFF(Register)
-    SUBV, //SUBV(Subtract value from register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
-    SUBR, //SUBR(Subtract register from register), 0xFF(Register Address), 0xFF(Register Address)
-    CTLE, //TLE(Cast to little endian), 0xFF(Register Address)
-    CTBE, //TLE(Cast to big endian), 0xFF(Register Address),
-    TESTR, //TEST(Tests a register, fills the flags register), 0xFF(Register)
-
-    ADDV, //0x0906(Add value from register), 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Value 64-Bit)
-    ADDR, //0x0906(Add register from register), 0xFF(Register Address), 0xFF(Register Address)
-    OUTR, //Out register 0xFF(Register Address) 0xFF(Port(File Descriptor basically))
-    CALLR,
-    CALLV,
-    RET,
-    PUSHR,
-    POPR,
-    SPI, //SPI - Stack Pointer Init, sets Stack flag
-    MOVFM, //MOVM(Move value from memory) 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Memory Address)
-    MOVTM, //MOVM(Move value to memory) 0xFF(Register Address), 0xFFFFFFFFFFFFFFFF(Memory Address)
-    ADDVEL, //ADDVEL(Add Value if Flags EQL or LWR is set)
-    ADDVEG, //ADDVEL(Add Value if Flags EQL or GTR is set)
-    ADDVE, //ADDVE(Add Value if Flags EQL is set)
-    XORR, //XOR Registers, you know what this does
-
-    pub fn fetch(program: []const u8) Instruction {
-        const intermediate: *[@divExact(@typeInfo(u16).Int.bits, 8)]u8 = @constCast(@ptrCast(program.ptr));
-        const val: u16 = @bitCast(intermediate.*);
-        return @enumFromInt(val);
-    }
-
-    pub fn len(self: *const Instruction) u8 {
-        const number: u16 = @intFromEnum(self.*);
-        const info = @typeInfo(Instruction);
-        const tag = @typeInfo(info.Enum.tag_type);
-        const length = number >> @divExact(tag.Int.bits, 2);
-        return @intCast(length);
-    }
-};
-
-pub fn sliceToType(program: []const u8, T: type) T {
-    const info = @typeInfo(T);
-    const len = switch (info) {
-        .Int => |I| I.bits,
-        .Float => |F| F.bits,
-        .Struct => |S| @typeInfo(S.backing_integer.?).Int.bits,
-        .Enum => |E| @typeInfo(E.tag_type).Int.bits,
-        else => @compileError("Stop doing weird things!"),
-    };
-    const intermediate: *[@divExact(len, 8)]u8 = @constCast(@ptrCast(program.ptr));
-    const val: T = @bitCast(intermediate.*);
-    return val;
+    self.pc += 1;
 }
 
 pc: u64 = 0,
 registers: [std.math.maxInt(u8)]Register,
-program: []const u8,
 memory: [1024]u64 = undefined,
 
-pub fn init(program: []const u8) Self {
+pub fn init() Self {
     return .{
         .pc = 0,
         .registers = std.mem.zeroes([std.math.maxInt(u8)]Register),
-        .program = program,
     };
 }
 
-fn fetchNext(self: *Self, T: type) T {
-    const addr = sliceToType(self.program[self.pc..], T);
-    self.pc += @sizeOf(T);
-    return addr;
-}
-
-pub fn fetchExecuteInstruction(self: *Self) !?void {
-    var flags: *FLAGSR = @ptrCast(&self.registers[FLAGS_ADDR]);
-    const ins = Instruction.fetch(self.program[self.pc..]);
-    self.pc += @sizeOf(@TypeOf(ins));
-    errdefer {
-        std.debug.print("Instruction {any} Program Counter: 0x{X}\n", .{ ins, self.pc });
-    }
-    switch (ins) {
-        .HLT => return null,
-        .MOVV => {
-            const addr = self.fetchNext(u8);
-            const value = self.fetchNext(u64);
-            self.registers[addr] = value;
-        },
-        .MOVR => {
-            const addr1 = self.fetchNext(u8);
-            const addr2 = self.fetchNext(u8);
-            self.registers[addr1] = self.registers[addr2];
-        },
-        .INCRNZ => {
-            const addr = self.fetchNext(u8);
-            if (self.registers[addr] != 0) {
-                self.registers[addr] += 1;
-            }
-        },
-        .INCR => {
-            const addr = self.fetchNext(u8);
-            self.registers[addr] += 1;
-        },
-        .DECR => {
-            const addr = self.fetchNext(u8);
-            self.registers[addr] -= 1;
-        },
-        .SUBR => {
-            const addr1 = self.fetchNext(u8);
-            const addr2 = self.fetchNext(u8);
-            self.registers[addr1] -= self.registers[addr2];
-        },
-        .XORR => {
-            const addr1 = self.fetchNext(u8);
-            const addr2 = self.fetchNext(u8);
-            self.registers[addr1] ^= self.registers[addr2];
-        },
-        .ADDR => {
-            const addr1 = self.fetchNext(u8);
-            const addr2 = self.fetchNext(u8);
-            self.registers[addr1] += self.registers[addr2];
-        },
-        .JMPV => {
-            const value = self.fetchNext(u64);
-            self.pc = value;
-        },
-        .JMPR => {
-            const addr = self.fetchNext(u8);
-            self.pc = self.registers[addr];
-        },
-        .CMPR => {
-            const addr1 = self.fetchNext(u8);
-            const addr2 = self.fetchNext(u8);
-            flags.equal = self.registers[addr1] == self.registers[addr2];
-            flags.greater = self.registers[addr1] < self.registers[addr2];
-            flags.lower = self.registers[addr1] > self.registers[addr2];
-        },
-        .CMPV => {
-            const addr = self.fetchNext(u8);
-            const value = self.fetchNext(u64);
-            flags.equal = self.registers[addr] == value;
-            flags.greater = self.registers[addr] > value;
-            flags.lower = self.registers[addr] < value;
-        },
-        .MOVVEG => {
-            const addr = self.fetchNext(u8);
-            const value = self.fetchNext(u64);
-            if (flags.equal or flags.greater) {
-                self.registers[addr] = value;
-            }
-        },
-        .ADDVEL => {
-            const addr = self.fetchNext(u8);
-            const value = self.fetchNext(u64);
-            if (flags.equal or flags.lower) {
-                self.registers[addr] += value;
-            }
-        },
-        .ADDVEG => {
-            const addr = self.fetchNext(u8);
-            const value = self.fetchNext(u64);
-            if (flags.equal or flags.greater) {
-                self.registers[addr] += value;
-            }
-        },
-        .ADDVE => {
-            const addr = self.fetchNext(u8);
-            const value = self.fetchNext(u64);
-            if (flags.equal) {
-                self.registers[addr] += value;
-            }
-        },
-        .MOVVL => {
-            const addr = self.fetchNext(u8);
-            const value = self.fetchNext(u64);
-            if (flags.lower) {
-                self.registers[addr] = value;
-            }
-        },
-        .TESTR => {
-            const addr = self.fetchNext(u8);
-            flags.zero = self.registers[addr] == 0;
-            const T = @TypeOf(self.registers[addr]);
-            const TBits = std.meta.Int(.unsigned, @typeInfo(T).Int.bits);
-            flags.sign = @as(TBits, @bitCast(self.registers[addr])) >> (@bitSizeOf(T) - 1) != 0;
-        },
-        .MOVVZ => {
-            const addr = self.fetchNext(u8);
-            const value = self.fetchNext(u64);
-            if (flags.zero) {
-                self.registers[addr] = value;
-            }
-            flags.zero = false;
-        },
-        .OUTR => {
-            const addr = self.fetchNext(u8);
-            const port = self.fetchNext(u8);
-            const val = self.registers[addr];
-            const handle = switch (@import("builtin").os.tag) {
-                .windows => std.os.windows.peb().ProcessParameters.hStdOutput,
-                else => @as(i32, @intCast(port)),
-            };
-            const info = @typeInfo(Register);
-            const writer = (std.fs.File{ .handle = handle }).writer();
-            const intermediate: [@divExact(info.Int.bits, 8)]u8 = @bitCast(val);
-            for (intermediate) |value| {
-                if (value == 0) break;
-                try writer.writeByte(value);
-            }
-
-            //writer.print("{d} ", .{self.registers[addr]}) catch {};
-        },
-        .SPI => {
-            self.registers[SP] = Stack;
-            flags.stack = true;
-        },
-        .PUSHR => {
-            const addr = self.fetchNext(u8);
-            const val = self.registers[addr];
-            const offset = self.registers[SP];
-            self.registers[offset] = val;
-            self.registers[SP] -= 1;
-        },
-        .POPR => {
-            self.registers[SP] += 1;
-            const addr = self.fetchNext(u8);
-            const offset = self.registers[SP];
-            const val = self.registers[offset];
-            self.registers[addr] = val;
-        },
-        .CALLR => {
-            const addr = self.fetchNext(u8);
-            const val = self.registers[addr];
-            self.pc = val;
-            const offset = self.registers[SP];
-            self.registers[offset] = val;
-            self.registers[SP] -= 1;
-        },
-        .CALLV => {
-            const offset = self.registers[SP];
-            const val = self.fetchNext(u64);
-            self.registers[offset] = self.pc;
-            self.registers[SP] -= 1;
-            self.pc = val;
-        },
-        .RET => {
-            self.registers[SP] += 1;
-            const offset = self.registers[SP];
-            self.pc = self.registers[offset];
-        },
-        else => return error.NotYetImplemented,
+pub fn load(self: *Self, bin: []u8) !void {
+    const ins = @as([*]u64, @alignCast(@ptrCast(bin.ptr)))[0..@divExact(bin.len, @sizeOf(u64))];
+    for (ins, self.memory[0..ins.len]) |value, *mem| {
+        mem.* = value;
     }
 }

@@ -2,24 +2,6 @@ const std = @import("std");
 const CPU = @import("cpu.zig");
 const assembler = @import("assembler.zig");
 
-const program = [_]u8{
-    0x01,
-    0x0A,
-    0x00,
-    0xFF,
-    0xFF,
-    0xFF,
-    0xFF,
-    0xFF,
-    0xFF,
-    0xFF,
-    0xFF,
-    0x02,
-    0x02,
-    0x01,
-    0x00,
-};
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -42,10 +24,17 @@ pub fn main() !void {
 
     try a.assemblyToMachineCode(filename,content);
 
-    var cpu = CPU.init(a.AL.items[0..]);
-    cpu.pc = a.HASH.get(".start").?;
+    var program = std.ArrayList(u8).init(allocator);
+    defer program.deinit();
+    const wprog = program.writer();
+    try a.writeInstructions(wprog);
 
-    while (try cpu.fetchExecuteInstruction()) |_| {
+    var cpu = CPU.init();
+    try cpu.load(wprog.context.items);
+    cpu.pc = a.references.get(".start") orelse return error.Guh;
+    cpu.pc /= 2;
+
+    while (try cpu.fetchDecodeExecute()) |_| {
     }
     std.debug.print("\n", .{});
 }
