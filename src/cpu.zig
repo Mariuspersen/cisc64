@@ -29,7 +29,7 @@ const Register = u64;
 pub const Endian = std.builtin.Endian.little;
 
 //Some addresses to named registers
-const MMU = 0x00;
+const NULL = 0x00;
 const FLAGS_ADDR = 0xFE;
 const SP = 0xFD;
 const Stack = 0xFC;
@@ -65,10 +65,10 @@ const Conditional = packed struct {
 };
 
 const FT = enum(u2) {
-    NONE,
     REGISTER,
-    MEMORY,
-    VALUE,
+    TO_MEMORY,
+    FROM_MEMORY,
+    INTERMEDIATE,
 };
 
 const OP = enum(u6) {
@@ -102,7 +102,7 @@ const OP = enum(u6) {
     CALL,
     PUSH,
     TEST,
-    SWAPE, //Swap Endianess
+    SWAP, //Swap Endianess
     BSF, // Bit Scan Forward (find first set bit)
     BSR, // Bit Scan Reverse (find last set bit)
     BTS, // Bit Test and Set
@@ -140,7 +140,7 @@ pub const Instruction = packed struct {
         ins.destination = dest;
         ins.source = source;
         var OTLen: usize = 0;
-        inline for (OPInfo.Enum.fields) |field| {    
+        inline for (OPInfo.Enum.fields) |field| {
             if (std.ascii.startsWithIgnoreCase(text, field.name)) {
                 ins.task.operation = @field(OP, field.name);
                 OTLen = field.name.len;
@@ -149,13 +149,13 @@ pub const Instruction = packed struct {
         if (OTLen == 0) return error.InvalidInstruction;
         if (text.len == OTLen) return ins;
         ins.task.fetch = switch (text[OTLen]) {
-            'N', 'n' => .NONE,
-            'M', 'm' => .MEMORY,
+            'T', 't' => .TO_MEMORY,
+            'F', 'f' => .FROM_MEMORY,
             'R', 'r' => .REGISTER,
-            'V', 'v' => .VALUE,
+            'I', 'i' => .INTERMEDIATE,
             else => blk: {
                 OTLen -= 1;
-                break :blk .NONE;
+                break :blk .INTERMEDIATE;
             },
         };
         OTLen += 1;
@@ -192,135 +192,136 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
     //Decode
     for (bundle) |instruction| {
         errdefer std.debug.print("{any}\n", .{instruction});
-        const dest = instruction.destination;
+        const destination = instruction.destination;
         const source = instruction.source;
         const flagConditions: u8 = @truncate(self.registers[FLAGS_ADDR]);
         const insConditions: u8 = @bitCast(instruction.condition);
-        
+
         const r = flagConditions & insConditions > 0;
         const c = insConditions != 0;
 
         switch (instruction.task.operation) {
             else => if (r and c) {} else if (r or c) continue,
-            .JMP => if (insConditions == 0) @breakpoint()
+            .JMP => if (insConditions == 0) @breakpoint(),
         }
-        
-        const src: u64 = switch (instruction.task.fetch) {
-            .MEMORY => self.memory[self.registers[dest]],
-            .NONE => 0,
-            .REGISTER => self.registers[dest],
-            .VALUE => dest,
+
+        const dest = switch (instruction.task.fetch) {
+            .TO_MEMORY => &self.memory[self.registers[destination]],
+            .FROM_MEMORY => &self.registers[destination],
+            .REGISTER => &self.registers[destination],
+            .INTERMEDIATE => &self.registers[destination],
         };
         const val: u64 = switch (instruction.task.fetch) {
-            .MEMORY => self.memory[self.registers[source]],
-            .NONE => 0,
+            .FROM_MEMORY => self.memory[self.registers[source]],
+            .TO_MEMORY => self.registers[source],
             .REGISTER => self.registers[source],
-            .VALUE => source,
+            .INTERMEDIATE => source,
         };
+
         //Execute
         switch (instruction.task.operation) {
             .ADD => {
-                self.registers[dest] += val;
+                dest.* += val;
             },
             .AND => {
-                self.registers[dest] &= val;
+                dest.* &= val;
             },
             .BSF => {
-                self.registers[dest] = @ctz(val);
+                dest.* = @ctz(val);
             },
             .BSR => {
-                self.registers[dest] = @clz(val);
+                dest.* = @clz(val);
             },
             .BTS => {
-                const truth = self.registers[dest] >> @intCast(val) & 1 == 1;
+                const truth = dest.* >> @intCast(val) & 1 == 1;
                 flags.carry = truth;
                 if (!truth) {
-                    self.registers[dest] |= std.math.shl(u64, 1, val);
+                    dest.* |= std.math.shl(u64, 1, val);
                 }
             },
             .BTR => {
-                const truth = self.registers[dest] >> @intCast(val) & 1 == 1;
+                const truth = dest.* >> @intCast(val) & 1 == 1;
                 flags.carry = truth;
                 if (!truth) {
-                    self.registers[dest] &= ~(std.math.shl(u64, 1, val));
+                    dest.* &= ~(std.math.shl(u64, 1, val));
                 }
             },
             .CALL => {
                 const offset = self.registers[SP];
                 self.registers[offset] = self.pc;
                 self.registers[SP] -= 1;
-                self.pc = dest;
+                self.pc = dest.*;
                 return;
             },
             .CMP => {
-                flags.equal = self.registers[dest] == val;
-                flags.greater = self.registers[dest] > val;
-                flags.lower = self.registers[dest] < val;
+                flags.equal = dest.* == val;
+                flags.greater = dest.* > val;
+                flags.lower = dest.* < val;
             },
             .DEC => {
-                self.registers[dest] -= 1;
+                dest.* -= 1;
             },
             .DIV => {
-                self.registers[dest] /= val;
+                dest.* /= val;
             },
             .FADD => {
-                const destF: f64 = @bitCast(self.registers[dest]);
+                const destF: f64 = @bitCast(dest.*);
                 const valF: f64 = @bitCast(val);
                 const result: f64 = destF + valF;
-                self.registers[dest] = @bitCast(result);
+                dest.* = @bitCast(result);
             },
             .FDIV => {
-                const destF: f64 = @bitCast(self.registers[dest]);
+                const destF: f64 = @bitCast(dest.*);
                 const valF: f64 = @bitCast(val);
                 const result = destF / valF;
-                self.registers[dest] = @bitCast(result);
+                dest.* = @bitCast(result);
             },
             .FMUL => {
-                const destF: f64 = @bitCast(self.registers[dest]);
+                const destF: f64 = @bitCast(dest.*);
                 const valF: f64 = @bitCast(val);
                 const result = destF * valF;
-                self.registers[dest] = @bitCast(result);
+                dest.* = @bitCast(result);
             },
             .FSQRT => {
                 const valF: f64 = @bitCast(val);
                 const result: f64 = @sqrt(valF);
-                self.registers[dest] = @bitCast(result);
+                dest.* = @bitCast(result);
             },
             .FSUB => {
-                const destF: f64 = @bitCast(self.registers[dest]);
+                const destF: f64 = @bitCast(dest.*);
                 const valF: f64 = @bitCast(val);
                 const result = destF - valF;
-                self.registers[dest] = @bitCast(result);
+                dest.* = @bitCast(result);
             },
             .FTI => {
                 const valF: f64 = @bitCast(val);
-                self.registers[dest] = @intFromFloat(valF);
+                dest.* = @intFromFloat(valF);
             },
             .HLT => {
                 return null;
             },
             .INC => {
-                self.registers[dest] += 1;
+                dest.* += 1;
             },
             .ITF => {
                 const valF: f64 = @floatFromInt(val);
-                self.registers[dest] = @bitCast(valF);
+                dest.* = @bitCast(valF);
             },
             .JMP => {
-                self.pc = src;
+                self.pc = dest.*;
                 return;
             },
             .MOV => {
-                self.registers[dest] = val;
+                dest.* = val;
             },
             .MUL => {
-                self.registers[dest] *= val;
+                dest.* *= val;
             },
             .NOP => {},
             .OUT => {
                 const handle = switch (@import("builtin").os.tag) {
                     .windows => std.os.windows.peb().ProcessParameters.hStdOutput,
-                    else => @as(i32, @intCast(dest)),
+                    else => @as(i32, @intCast(destination)),
                 };
                 const info = @typeInfo(Register);
                 const writer = (std.fs.File{ .handle = handle }).writer();
@@ -331,68 +332,64 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                 }
             },
             .OR => {
-                self.registers[dest] |= val;
+                dest.* |= val;
             },
             .POP => {
                 self.registers[SP] += 1;
                 const offset = self.registers[SP];
                 const top = self.registers[offset];
-                self.registers[dest] = top;
+                dest.* = top;
             },
             .PUSH => {
                 const offset = self.registers[SP];
-                self.registers[offset] = src;
+                self.registers[offset] = dest.*;
                 self.registers[SP] -= 1;
             },
             .RET => {
                 self.registers[SP] += 1;
                 const offset = self.registers[SP];
-                self.pc = self.registers[offset]+1;
+                self.pc = self.registers[offset] + 1;
                 return;
             },
             .SL => {
-                self.registers[dest] <<= @intCast(val);
+                dest.* <<= @intCast(val);
             },
             .SPI => {
                 self.registers[SP] = Stack;
                 flags.stack = true;
             },
             .SQRT => {
-                self.registers[dest] = std.math.sqrt(val);
+                dest.* = std.math.sqrt(val);
             },
             .SR => {
-                self.registers[dest] >>= @intCast(val);
+                dest.* >>= @intCast(val);
             },
             .SUB => {
-                self.registers[dest] -= val;
+                dest.* -= val;
             },
             .TEST => {
                 flags.zero = val == 0;
-                const T = @TypeOf(val);
+                const T = @TypeOf(dest.*);
                 const TBits = std.meta.Int(.unsigned, @typeInfo(T).Int.bits);
-                flags.sign = @as(TBits, @bitCast(val)) >> (@bitSizeOf(T) - 1) != 0;
+                flags.sign = @as(TBits, @bitCast(dest.*)) >> (@bitSizeOf(T) - 1) != 0;
             },
-            .SWAPE => {
-                self.registers[dest] = @byteSwap(val);
+            .SWAP => {
+                dest.* = @byteSwap(val);
             },
             .XCHG => {
-                self.registers[dest] ^= val;
-                switch (instruction.task.fetch) {
-                    .MEMORY => self.memory[self.registers[source]] ^= self.registers[dest],
-                    .REGISTER => self.registers[source] ^= self.registers[dest],
-                    .VALUE => return error.CantStoreToImmediateValue,
-                    .NONE => return error.CantExchangeWithNothing,
-                }
-                switch (instruction.task.fetch) {
-                    .MEMORY => self.registers[dest] ^= self.memory[self.registers[source]],
-                    .REGISTER => self.registers[dest] ^= self.registers[source],
-                    .VALUE => self.registers[dest] ^= source,
-                    .NONE => return error.CantExchangeWithNothing,
-                }
+                const ptr = switch (instruction.task.fetch) {
+                    .FROM_MEMORY => &self.memory[self.registers[source]],
+                    .TO_MEMORY => &self.registers[source],
+                    .REGISTER => &self.registers[source],
+                    .INTERMEDIATE => continue,
+                };
+                dest.* ^= ptr.*;
+                ptr.* ^= dest.*;
+                dest.* ^= ptr.*;
             },
             .XOR => {
-                self.registers[dest] ^= val;
-            }
+                dest.* ^= val;
+            },
         }
     }
     self.pc += 1;

@@ -3,11 +3,10 @@
 %REG1 0x0
 %REG2 0x1
 
-
 .loop
     incr %REG1
-    cmpv %REG1 0x7E
-    movveg %REG2, .end
+    cmpi %REG1 0x7E
+    movieg %REG2, .end
     outr %STDOUT, %REG1
     jmpr %REG2
     nop
@@ -16,6 +15,6 @@
     hlt
 .start
     spi
-    movv %REG1 0x21
-    movv %REG2 .loop
+    movi %REG1 0x21
+    movi %REG2 .loop
     jmpr %REG2

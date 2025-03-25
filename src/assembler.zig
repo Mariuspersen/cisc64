@@ -6,9 +6,24 @@ const Instruction = CPU.Instruction;
 const BackingInt = @typeInfo(Instruction).Enum.tag_type;
 const Self = @This();
 
+pub const MAGIC: u48 = @bitCast([_]u8{'C','I','S','C','6','4'});
+
+pub const Header = packed struct {
+    magic: u48 = MAGIC,
+    entry: u64,  //address to the entry
+    size: usize, //Size of the instruction
+    len: usize,  //Amount of those instructions
+ };
+
+const Side = enum {
+    DEST,
+    SRC,
+};
+
 const Unresolved = struct {
     label: []const u8,
     position: usize,
+    side: Side,
 };
 
 const Unresolvables = std.ArrayList(Unresolved);
@@ -87,7 +102,7 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
             errdefer std.debug.print("\"{s}\" <---- this\n", .{token});
             switch (token[0]) {
                 '_', '.', '%' => {
-                    const value = try self.checkReference(token);
+                    const value = try self.checkReference(token,.DEST);
                     break :blk value;
                 },
                 else => {},
@@ -99,7 +114,7 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
             errdefer std.debug.print("\"{s}\" <---- this\n", .{token});
             switch (token[0]) {
                 '_', '.', '&', '%' => {
-                    const value = try self.checkReference(token);
+                    const value = try self.checkReference(token,.SRC);
                     break :blk value;
                 },
                 else => {},
@@ -112,25 +127,20 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
     for (self.unresolved.items) |ref| {
         errdefer std.debug.print("{s}\n", .{ref.label});
         const jumpaddr = self.references.get(ref.label) orelse return error.NoLabelByThatName;
-        std.debug.print("{d} {s} {d} {any}\n", .{jumpaddr, ref.label,ref.position,self.instructions.items[ref.position]});
-        self.instructions.items[ref.position].destination = @intCast(jumpaddr / 2);
+        switch (ref.side) {
+            .DEST => self.instructions.items[ref.position].destination = @intCast(jumpaddr),
+            .SRC => self.instructions.items[ref.position].source = @intCast(jumpaddr),
+        }
     }
     self.start = self.references.get(".start") orelse return error.NoStart;
-
-    var ref_it = self.references.iterator();
-    while (ref_it.next()) |ref| {
-        std.debug.print("{s} {d}\n", .{ref.key_ptr.*,ref.value_ptr.*});
-    }
-    for (self.instructions.items) |ins| {
-        std.debug.print("{any} {d} {d}\n", .{ins.task.operation, ins.destination, ins.source });
-    }
 }
 
-fn checkReference(self: *Self, token: []const u8) !usize {
+fn checkReference(self: *Self, token: []const u8,side: Side) !usize {
     return self.references.get(token) orelse inner: {
         try self.unresolved.append(.{
             .label = token,
             .position = self.instructions.items.len,
+            .side = side,
         });
         unresolvedRef = true;
         break :inner undefined;
