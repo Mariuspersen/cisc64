@@ -30,4 +30,18 @@ pub fn build(b: *std.Build) void {
     const emulate_step = b.step("emulate", "Emulate a binary");
     emulate_step.dependOn(&emulate.step);
 
+    const main = b.addExecutable(.{
+        .name = "cisc64",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(main);
+    const main_cmd = b.addRunArtifact(main);
+    main_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| main_cmd.addArgs(args);
+    const main_step = b.step("run", "Assemble and Emulate");
+    main_step.dependOn(&main_cmd.step);
+
+
 }

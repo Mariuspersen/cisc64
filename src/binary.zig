@@ -19,7 +19,12 @@ pub fn main() !void {
     defer input.close();
     defer allocator.free(assembly);
 
-    const output_filename = args.next() orelse return error.NoFileGiven;
+    const output_filename = args.next() orelse blk: {
+        if (std.mem.lastIndexOfAny(u8, input_filename, ".")) |ext| {
+            break :blk input_filename[0..ext];
+        } else return error.InvalidInputFile;
+    };
+
     const output = try std.fs.cwd().createFile(output_filename, .{});
     const writer = output.writer();
     defer output.close();

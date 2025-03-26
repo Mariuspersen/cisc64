@@ -12,7 +12,15 @@ pub fn main() !void {
 
     _ = args.skip();
 
-    const filename = args.next() orelse return error.NoFileGiven;
+    const filename = blk: {
+        if (args.next()) |arg| {
+            if (std.mem.endsWith(u8, arg, ".s"))
+            if (std.mem.lastIndexOfAny(u8, arg, ".")) |ext| {
+                break :blk arg[0..ext];
+            };
+            break :blk arg;
+        } else return error.NoInputFile;
+    };
 
     const file = try std.fs.cwd().openFile(filename, .{});
     const reader = file.reader();
