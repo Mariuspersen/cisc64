@@ -7,8 +7,10 @@
     incr %REG1
     cmpi %REG1 0x7E
     outr %STDOUT, %REG1
-    reteg
+    movieg %REG2, .end,
     jmpr %REG2
+.end
+    ret
 .start
     spi
     movi %REG1 0x20

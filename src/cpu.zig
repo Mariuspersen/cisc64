@@ -156,6 +156,15 @@ pub const Instruction = packed struct {
             },
         };
         OTLen += 1;
+        switch (ins.task.operation) {
+            .CALL, .RET, .JMP => {
+                if (text.len != OTLen) {
+                    std.debug.print("Instructions that modify program counter cannot have conditionals!\n", .{});
+                    return error.ConditionalOnJump;
+                }
+            },
+            else => {}
+        }
         for (text[OTLen..]) |c| switch (c) {
             'Z', 'z' => ins.condition.zero = true,
             'E', 'e' => ins.condition.equal = true,
