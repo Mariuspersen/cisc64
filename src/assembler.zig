@@ -6,14 +6,24 @@ const Instruction = CPU.Instruction;
 const BackingInt = @typeInfo(Instruction).Enum.tag_type;
 const Self = @This();
 
-pub const MAGIC: u64 = @bitCast([_]u8{'C','I','S','C','6','4','L','E'});
+pub const MAGIC: u64 = @bitCast([_]u8{ 'C', 'I', 'S', 'C', '6', '4', 'L', 'E' });
+
+pub const Yellow = "\x1b[38;2;255;255;0m";
+pub const Red = "\x1b[38;2;255;0;0m";
+pub const Reset = "\x1b[0m";
+pub const Bold = "\x1b[1m";
+pub const White = "\x1b[38;2;255;255;255m";
+
+const LINE = Bold ++ White ++ "{s}:{d}:{d}:" ++ Reset ++ "\t{s}\n";
+const WARNING = Bold ++ Yellow ++ "WARNING: " ++ Reset;
+const ERROR = Bold ++ Red ++ "ERROR: " ++ Reset;
 
 pub const Header = packed struct {
     magic: u64 = MAGIC,
-    entry: u64,  //address to the entry
+    entry: u64, //address to the entry
     size: usize, //Size of the instruction
-    len: usize,  //Amount of those instructions
- };
+    len: usize, //Amount of those instructions
+};
 
 const Side = enum {
     DEST,
@@ -73,7 +83,7 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
     line_count = 0;
 
     while (line_it.next()) |line| : (line_count += 1) {
-        errdefer std.debug.print("{s}:{d}:{d}:\t{s}\n", .{ filename, line_count + 1, line.len, line });
+        errdefer std.debug.print(ERROR ++ LINE, .{ filename, line_count + 2, line.len, line });
         if (line.len == 0) continue;
 
         if (std.mem.startsWith(u8, line, ".data")) {
@@ -95,6 +105,8 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
             if (self.instructions.items.len % 2 != 0) {
                 const padding = try Instruction.fromToken("nop", 0, 0);
                 try self.instructions.append(padding);
+                std.debug.print(WARNING ++ "Consider alignment, avoid nops\n", .{});
+                std.debug.print(LINE, .{ filename, line_count + 1, line.len, line });
             }
             try self.references.put(line, self.instructions.items.len / 2);
             continue;
@@ -102,10 +114,10 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
 
         const dest = blk: {
             const token = tokens_it.next() orelse "0";
-            errdefer std.debug.print("\"{s}\" <---- this\n", .{token});
+            errdefer std.debug.print(White ++ "\"{s}\"\n" ++ Reset, .{token});
             switch (token[0]) {
                 '_', '.', '%' => {
-                    const value = try self.checkReference(token,.DEST);
+                    const value = try self.checkReference(token, .DEST);
                     break :blk value;
                 },
                 else => {},
@@ -114,39 +126,50 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
         };
         const source = blk: {
             const token = tokens_it.next() orelse "0";
-            errdefer std.debug.print("\"{s}\" <---- this\n", .{token});
+            errdefer std.debug.print(White ++ "\"{s}\"\n" ++ Reset, .{token});
             switch (token[0]) {
                 '_', '.', '&', '%' => {
-                    const value = try self.checkReference(token,.SRC);
+                    const value = try self.checkReference(token, .SRC);
                     break :blk value;
                 },
                 else => {},
             }
             break :blk try std.fmt.parseInt(u64, token, 0);
         };
-        if (std.fmt.parseInt(u32, text, 0)) |immediate|  {
+        if (std.fmt.parseInt(u32, text, 0)) |immediate| {
             const last = self.instructions.getLast();
-            if (last.task.operation == .LIW) {
+            if (last.task.operation == .LI32) {
                 const value: Instruction = @bitCast(immediate);
                 try self.instructions.append(value);
                 continue;
             }
-        }
-        else |_| {}
-        if (std.fmt.parseInt(u64, text, 0)) |immediate|  {
+        } else |_| {}
+        if (std.fmt.parseInt(u64, text, 0)) |immediate| {
             const last = self.instructions.getLast();
-            if (last.task.operation == .LIL) {
+            if (last.task.operation == .LI64) {
                 if (self.instructions.items.len % 2 != 0) {
                     const padding = try Instruction.fromToken("nop", 0, 0);
                     try self.instructions.append(padding);
+                    std.debug.print(WARNING ++ "Consider alignment, avoid nops\n", .{});
+                    std.debug.print(LINE, .{ filename, line_count + 1, line.len, line });
                 }
                 const values: [2]Instruction = @bitCast(immediate);
                 for (values) |value| try self.instructions.append(value);
                 continue;
             }
+        } else |_| {}
+        const instruction = try Instruction.fromToken(text, @truncate(dest), @truncate(source));
+        switch (instruction.task.operation) {
+            .CALL, .JMP => {
+                if (self.instructions.items.len % 2 == 0) {
+                    const padding = try Instruction.fromToken("nop", 0, 0);
+                    try self.instructions.append(padding);
+                    std.debug.print(WARNING ++ "Consider making call aligned\n", .{});
+                    std.debug.print(LINE, .{ filename, line_count + 2, line.len, line });
+                }
+            },
+            else => {}
         }
-        else |_| {}
-        const instruction = try Instruction.fromToken(text, @intCast(dest), @intCast(source));
         try self.instructions.append(instruction);
     }
     for (self.unresolved.items) |ref| {
@@ -157,10 +180,16 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
             .SRC => self.instructions.items[ref.position].source = @intCast(jumpaddr),
         }
     }
+    if (self.instructions.items.len % 2 != 0) {
+        const padding = try Instruction.fromToken("nop", 0, 0);
+        try self.instructions.append(padding);
+        std.debug.print(WARNING ++ "Consider alignment, avoid nops\n", .{});
+        std.debug.print(LINE, .{ filename,line_count+1, 0, "HERE" });
+    }
     self.start = self.references.get(".start") orelse return error.NoStart;
 }
 
-fn checkReference(self: *Self, token: []const u8,side: Side) !usize {
+fn checkReference(self: *Self, token: []const u8, side: Side) !usize {
     return self.references.get(token) orelse inner: {
         try self.unresolved.append(.{
             .label = token,

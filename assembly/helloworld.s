@@ -5,9 +5,9 @@
 
 .hello
     nop
-    lilr %REG2
+    li64r %REG2
     0x6F57206f6c6c6548
-    lilr %REG1
+    li64r %REG1
     0xA21646c72
     outr %STDOUT, %REG2
     outr %STDOUT, %REG1

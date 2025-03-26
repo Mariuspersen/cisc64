@@ -116,8 +116,9 @@ const OP = enum(u6) {
     BTR, // Bit Test and Reset
     XCHG, // Exchange values of two registers
     OUT,
-    LIW, //Load Immediate Word
-    LIL, //Load Immediate Long
+    LI32, //Load Immediate Word
+    LI64, //Load Immediate Long
+    IN,
 };
 
 const Task = packed struct {
@@ -236,7 +237,7 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
 
         switch (instruction.task.operation) {
             else => if (r and c) {} else if (r or c) continue,
-            .JMP => if (insConditions != 0) @breakpoint(),
+            .JMP, .CALL, .RET => if (insConditions != 0) return error.ConditionalOnJump,
         }
 
         //Execute
@@ -338,13 +339,13 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                 };
                 return;
             },
-            .LIW => {
+            .LI32 => {
                 const offset = self.registers[SP];
                 self.registers[offset] = destination;
                 self.registers[SP] -= 1;
                 flags.value = .WORD;
             },
-            .LIL => {
+            .LI64 => {
                 const offset = self.registers[SP];
                 self.registers[offset] = destination;
                 self.registers[SP] -= 1;
@@ -370,6 +371,14 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                     if (value == 0) break;
                     try writer.writeByte(value);
                 }
+            },
+            .IN => {
+                const handle = switch (@import("builtin").os.tag) {
+                    .windows => std.os.windows.peb().ProcessParameters.hStdInput,
+                    else => @as(i32, @intCast(destination)),
+                };
+                const reader = (std.fs.File{ .handle = handle }).reader();
+                dest.* = try reader.readByte();
             },
             .OR => {
                 dest.* |= val;

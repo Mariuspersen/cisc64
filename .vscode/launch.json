@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/zig-out/bin/cisc64",
             "args": [
-                "src/test.s",
+                "assembly/isDigit.s",
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -19,31 +19,17 @@
             "preLaunchTask": "build"
         },
         {
-            "name": "emulator-lldb",
+            "name": "lldb",
             "request": "launch",
             "type": "lldb",
-            "program": "${workspaceFolder}/zig-out/bin/emulator",
+            "program": "${workspaceFolder}/zig-out/bin/cisc64",
             "stopOnEntry": false,
             "args": [
-                "test",
+                "assembly/isDigit.s",
             ],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "build"
 
         },
-        {
-            "name": "assembler-lldb",
-            "request": "launch",
-            "type": "lldb",
-            "program": "${workspaceFolder}/zig-out/bin/casm",
-            "stopOnEntry": false,
-            "args": [
-                "src/helloworld.s",
-                "hello"
-            ],
-            "cwd": "${workspaceFolder}",
-            "preLaunchTask": "build"
-
-        }
     ]
 }
