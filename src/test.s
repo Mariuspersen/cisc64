@@ -6,15 +6,13 @@
 .loop
     incr %REG1
     cmpi %REG1 0x7E
-    movieg %REG2, .end
     outr %STDOUT, %REG1
+    reteg
     jmpr %REG2
-    nop
-.end
-    hlt
-    hlt
 .start
     spi
-    movi %REG1 0x21
+    movi %REG1 0x20
     movi %REG2 .loop
-    jmpr %REG2
+    callr %REG2
+    outi %STDOUT, 0xA
+    hlt

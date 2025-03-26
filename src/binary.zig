@@ -25,8 +25,8 @@ pub fn main() !void {
     defer output.close();
     
     var a = assembler.init(allocator);
-    try a.assemblyToMachineCode(input_filename,assembly);
     defer a.deinit();
+    try a.assemblyToMachineCode(input_filename,assembly);
 
     const header = assembler.Header{
         .entry = a.start,

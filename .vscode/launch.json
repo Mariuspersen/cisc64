@@ -19,12 +19,27 @@
             "preLaunchTask": "build"
         },
         {
-            "type": "lldb",
+            "name": "emulator-lldb",
             "request": "launch",
-            "name": "LLDB",
-            "program": "${workspaceFolder}/zig-out/bin/cisc64",
+            "type": "lldb",
+            "program": "${workspaceFolder}/zig-out/bin/emulator",
+            "stopOnEntry": false,
+            "args": [
+                "test",
+            ],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "build"
+
+        },
+        {
+            "name": "assembler-lldb",
+            "request": "launch",
+            "type": "lldb",
+            "program": "${workspaceFolder}/zig-out/bin/casm",
+            "stopOnEntry": false,
             "args": [
                 "src/helloworld.s",
+                "hello"
             ],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "build"

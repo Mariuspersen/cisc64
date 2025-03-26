@@ -29,10 +29,16 @@ const Register = u64;
 pub const Endian = std.builtin.Endian.little;
 
 //Some addresses to named registers
-const NULL = 0x00;
-const FLAGS_ADDR = 0xFE;
-const SP = 0xFD;
-const Stack = 0xFC;
+const FLAGS_ADDR = 0xFF - 1;
+const SP = 0xFF - 2;
+const Stack = 0xFF - 3;
+
+const IMMEDIATE_TYPE = enum(u2) {
+    NONE,
+    SHORT,
+    WORD,
+    LONG,
+};
 
 const FLAGSR = packed struct {
     zero: bool,
@@ -44,7 +50,8 @@ const FLAGSR = packed struct {
     overflow: bool,
     parity: bool,
     stack: bool,
-    _: u55,
+    value: IMMEDIATE_TYPE,
+    _: u53,
 };
 
 //I think in the future the way this sure work is a Instruction is 2 bytes, the first byte is the conditional,
@@ -68,7 +75,7 @@ const FT = enum(u2) {
     REGISTER,
     TO_MEMORY,
     FROM_MEMORY,
-    INTERMEDIATE,
+    IMMEDIATE,
 };
 
 const OP = enum(u6) {
@@ -109,23 +116,13 @@ const OP = enum(u6) {
     BTR, // Bit Test and Reset
     XCHG, // Exchange values of two registers
     OUT,
+    LIW, //Load Immediate Word
+    LIL, //Load Immediate Long
 };
 
 const Task = packed struct {
     fetch: FT, //Fetch type, value,register,memory
     operation: OP, //What actually is being executed
-};
-
-const NAME_MAX_LEN = blk: {
-    const info = @typeInfo(OP);
-    const cinfo = @typeInfo(Conditional);
-    var len = 0;
-    for (info.Enum.fields) |field| {
-        if (field.name.len > len) {
-            len = field.name.len;
-        }
-    }
-    break :blk len + cinfo.Struct.fields.len + 1;
 };
 
 pub const Instruction = packed struct {
@@ -152,10 +149,10 @@ pub const Instruction = packed struct {
             'T', 't' => .TO_MEMORY,
             'F', 'f' => .FROM_MEMORY,
             'R', 'r' => .REGISTER,
-            'I', 'i' => .INTERMEDIATE,
+            'I', 'i' => .IMMEDIATE,
             else => blk: {
                 OTLen -= 1;
-                break :blk .INTERMEDIATE;
+                break :blk .IMMEDIATE;
             },
         };
         OTLen += 1;
@@ -192,31 +189,46 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
     //Decode
     for (bundle) |instruction| {
         errdefer std.debug.print("{any}\n", .{instruction});
+
         const destination = instruction.destination;
         const source = instruction.source;
         const flagConditions: u8 = @truncate(self.registers[FLAGS_ADDR]);
         const insConditions: u8 = @bitCast(instruction.condition);
 
-        const r = flagConditions & insConditions > 0;
-        const c = insConditions != 0;
-
-        switch (instruction.task.operation) {
-            else => if (r and c) {} else if (r or c) continue,
-            .JMP => if (insConditions == 0) @breakpoint(),
-        }
-
         const dest = switch (instruction.task.fetch) {
             .TO_MEMORY => &self.memory[self.registers[destination]],
             .FROM_MEMORY => &self.registers[destination],
             .REGISTER => &self.registers[destination],
-            .INTERMEDIATE => &self.registers[destination],
+            .IMMEDIATE => &self.registers[destination],
         };
         const val: u64 = switch (instruction.task.fetch) {
             .FROM_MEMORY => self.memory[self.registers[source]],
             .TO_MEMORY => self.registers[source],
             .REGISTER => self.registers[source],
-            .INTERMEDIATE => source,
+            .IMMEDIATE => source,
         };
+
+        if (flags.value != .NONE) {
+            self.registers[SP] += 1;
+            const offset = self.registers[SP];
+            const top = self.registers[offset];
+            self.registers[top] = switch (flags.value) {
+                .WORD, .SHORT => @as(u32, @bitCast(instruction)),
+                .LONG => @bitCast(bundle),
+                .NONE => continue,
+            };
+            flags.value = .NONE;
+            continue;
+        }
+
+        const r = flagConditions & insConditions > 0;
+        const c = insConditions != 0;
+
+
+        switch (instruction.task.operation) {
+            else => if (r and c) {} else if (r or c) continue,
+            .JMP => if (insConditions != 0) @breakpoint(),
+        }
 
         //Execute
         switch (instruction.task.operation) {
@@ -250,7 +262,10 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                 const offset = self.registers[SP];
                 self.registers[offset] = self.pc;
                 self.registers[SP] -= 1;
-                self.pc = dest.*;
+                self.pc = switch (instruction.task.fetch) {
+                    .IMMEDIATE => destination,
+                    else => dest.*,
+                };
                 return;
             },
             .CMP => {
@@ -308,8 +323,24 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                 dest.* = @bitCast(valF);
             },
             .JMP => {
-                self.pc = dest.*;
+                self.pc = switch (instruction.task.fetch) {
+                    .IMMEDIATE => destination,
+                    else => dest.*,
+                };
                 return;
+            },
+            .LIW => {
+                const offset = self.registers[SP];
+                self.registers[offset] = destination;
+                self.registers[SP] -= 1;
+                flags.value = .WORD;
+            },
+            .LIL => {
+                const offset = self.registers[SP];
+                self.registers[offset] = destination;
+                self.registers[SP] -= 1;
+                flags.value = .LONG;
+                break;
             },
             .MOV => {
                 dest.* = val;
@@ -381,7 +412,7 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                     .FROM_MEMORY => &self.memory[self.registers[source]],
                     .TO_MEMORY => &self.registers[source],
                     .REGISTER => &self.registers[source],
-                    .INTERMEDIATE => continue,
+                    .IMMEDIATE => continue,
                 };
                 dest.* ^= ptr.*;
                 ptr.* ^= dest.*;

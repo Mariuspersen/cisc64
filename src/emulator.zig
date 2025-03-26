@@ -30,4 +30,5 @@ pub fn main() !void {
     cpu.pc = header.entry;
 
     while (try cpu.fetchDecodeExecute()) |_| {}
+    return;
 }

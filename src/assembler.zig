@@ -6,10 +6,10 @@ const Instruction = CPU.Instruction;
 const BackingInt = @typeInfo(Instruction).Enum.tag_type;
 const Self = @This();
 
-pub const MAGIC: u48 = @bitCast([_]u8{'C','I','S','C','6','4'});
+pub const MAGIC: u64 = @bitCast([_]u8{'C','I','S','C','6','4','L','E'});
 
 pub const Header = packed struct {
-    magic: u48 = MAGIC,
+    magic: u64 = MAGIC,
     entry: u64,  //address to the entry
     size: usize, //Size of the instruction
     len: usize,  //Amount of those instructions
@@ -92,7 +92,10 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
             continue;
         }
         if (line[0] == '_' or line[0] == '.') {
-            if (self.instructions.items.len % 2 != 0) return error.JumpPointNotAligned8Bytes;
+            if (self.instructions.items.len % 2 != 0) {
+                const padding = try Instruction.fromToken("nop", 0, 0);
+                try self.instructions.append(padding);
+            }
             try self.references.put(line, self.instructions.items.len / 2);
             continue;
         }
@@ -121,6 +124,28 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
             }
             break :blk try std.fmt.parseInt(u64, token, 0);
         };
+        if (std.fmt.parseInt(u32, text, 0)) |immediate|  {
+            const last = self.instructions.getLast();
+            if (last.task.operation == .LIW) {
+                const value: Instruction = @bitCast(immediate);
+                try self.instructions.append(value);
+                continue;
+            }
+        }
+        else |_| {}
+        if (std.fmt.parseInt(u64, text, 0)) |immediate|  {
+            const last = self.instructions.getLast();
+            if (last.task.operation == .LIL) {
+                if (self.instructions.items.len % 2 != 0) {
+                    const padding = try Instruction.fromToken("nop", 0, 0);
+                    try self.instructions.append(padding);
+                }
+                const values: [2]Instruction = @bitCast(immediate);
+                for (values) |value| try self.instructions.append(value);
+                continue;
+            }
+        }
+        else |_| {}
         const instruction = try Instruction.fromToken(text, @intCast(dest), @intCast(source));
         try self.instructions.append(instruction);
     }
