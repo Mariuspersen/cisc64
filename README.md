@@ -7,9 +7,11 @@ Current Idea: EPIC Type ISA 32-Bit fixed instruction size with No Conditional Ju
 - a 8-bit addressable space of 64-bit Registers
 - 64-bit fetch of two 32-bit instructions, fed into two pipelines
 - Each instruction has a conditional, will not execute if appropriate flag is not set
-- Only exception is jumps, any jump with a conditional will be ignored
-- Each instruction has a load type, None, Memory, Register, Value.
-- None loads nothing, some instructions also dont take arguments,
-- Memory means it will use the 64-bit value in the register address as a pointer into memory
-- Register means it will use the 64-bit value from the register directly
-- Value means it will intepret the 8-bit address as a value
+- The instruction will still execute if none of the instruction flags are set
+- Only exception is any instruction modifying the program counter (JMP, CALL, RTS, etc)
+- Each instruction has a fetch type, REGISTER, TO_MEMORY, FROM_MEMORY, IMMEDIATE,
+- REGISTER will use the right hand value as a address to a register value
+- TO_MEMORY will use the left hand value as address to a register containing a pointer into memory
+- FROM_MEMORY will use right hand value as address to a register containing a pointer into memory
+- IMMEDIATE will be interpreted as a value
+- 32bit and 64bit immediate loads are possible through LI32 and LI64 instructions
