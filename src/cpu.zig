@@ -29,9 +29,10 @@ const Register = u64;
 pub const Endian = std.builtin.Endian.little;
 
 //Some addresses to named registers
-const FLAGS_ADDR = 0xFF - 1;
-const SP = 0xFF - 2;
-const Stack = 0xFF - 3;
+const REMAINDER = 0xFF - 1;
+const FLAGS_ADDR = 0xFF - 2;
+const SP = 0xFF - 3;
+const Stack = 0xFF - 4;
 
 const IMMEDIATE_TYPE = enum(u2) {
     NONE,
@@ -205,6 +206,19 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
         const flagConditions: u8 = @truncate(self.registers[FLAGS_ADDR]);
         const insConditions: u8 = @bitCast(instruction.condition);
 
+        if (flags.value != .NONE) {
+            self.registers[SP] += 1;
+            const offset = self.registers[SP];
+            const top = self.registers[offset];
+            self.registers[top] = switch (flags.value) {
+                .WORD, .SHORT => @as(u32, @bitCast(instruction)),
+                .LONG => @bitCast(bundle),
+                .NONE => break,
+            };
+            flags.value = .NONE;
+            break;
+        }
+
         const dest = switch (instruction.task.fetch) {
             .TO_MEMORY => &self.memory[self.registers[destination]],
             .FROM_MEMORY => &self.registers[destination],
@@ -218,22 +232,8 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
             .IMMEDIATE => source,
         };
 
-        if (flags.value != .NONE) {
-            self.registers[SP] += 1;
-            const offset = self.registers[SP];
-            const top = self.registers[offset];
-            self.registers[top] = switch (flags.value) {
-                .WORD, .SHORT => @as(u32, @bitCast(instruction)),
-                .LONG => @bitCast(bundle),
-                .NONE => continue,
-            };
-            flags.value = .NONE;
-            continue;
-        }
-
         const r = flagConditions & insConditions > 0;
         const c = insConditions != 0;
-
 
         switch (instruction.task.operation) {
             else => if (r and c) {} else if (r or c) continue,
@@ -243,7 +243,9 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
         //Execute
         switch (instruction.task.operation) {
             .ADD => {
-                dest.* += val;
+                const result = @addWithOverflow(dest.*, val);
+                dest.* = result[0];
+                flags.carry = @bitCast(result[1]);
             },
             .AND => {
                 dest.* &= val;
@@ -284,10 +286,13 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                 flags.lower = dest.* < val;
             },
             .DEC => {
-                dest.* -= 1;
+                const result = @subWithOverflow(dest.*, 1);
+                dest.* = result[0];
+                flags.zero = @bitCast(result[1]);
             },
             .DIV => {
-                dest.* /= val;
+                dest.* = @divTrunc(dest.*, val);
+                self.registers[REMAINDER] = @rem(dest.*, val);
             },
             .FADD => {
                 const destF: f64 = @bitCast(dest.*);
@@ -326,7 +331,9 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                 return null;
             },
             .INC => {
-                dest.* += 1;
+                const result = @addWithOverflow(dest.*, 1);
+                dest.* = result[0];
+                flags.carry = @bitCast(result[1]);
             },
             .ITF => {
                 const valF: f64 = @floatFromInt(val);
@@ -356,7 +363,9 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                 dest.* = val;
             },
             .MUL => {
-                dest.* *= val;
+                const result = @mulWithOverflow(dest.*, val);
+                dest.* = result[0];
+                flags.carry = @bitCast(result[1]);
             },
             .NOP => {},
             .OUT => {

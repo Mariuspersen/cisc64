@@ -60,15 +60,18 @@ pub fn deinit(self: *Self) void {
 }
 
 var unresolvedRef = false;
-pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []const u8) !void {
-    var line_it = std.mem.splitAny(u8, assembly, "\n\r");
+pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []u8) !void {
+    _ = std.mem.replace(u8, assembly, "\r", " ", assembly);
+    var line_it = std.mem.splitAny(u8, assembly, "\n");
     var line_count: usize = 0;
 
     if (std.mem.indexOf(u8, assembly, ".data")) |i| {
         line_it.index = i;
         _ = line_it.next();
-        while (line_it.next()) |line| : (line_count += 1) {
-            if (line.len == 0) break;
+        
+        while (line_it.next()) |untrimmed| : (line_count += 1) {
+            const line = std.mem.trim(u8, untrimmed, " ");
+            if (line.len <= 1) break;
             var tokens = std.mem.tokenizeAny(u8, line, " \t");
             const decl = tokens.next() orelse return error.DataNoDecl;
             const val = tokens.next() orelse return error.DataNoVal;
@@ -82,25 +85,28 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
     line_it.reset();
     line_count = 0;
 
-    while (line_it.next()) |line| : (line_count += 1) {
+    while (line_it.next()) |untrimmed| : (line_count += 1) {
+        const line = std.mem.trim(u8, untrimmed, " ");
         errdefer std.debug.print(ERROR ++ LINE, .{ filename, line_count + 2, line.len, line });
-        if (line.len == 0) continue;
+        if (line.len <= 1) continue;
 
         if (std.mem.startsWith(u8, line, ".data")) {
             while (line_it.next()) |l| : (line_count += 1) {
-                if (l.len == 0) break;
+                if (l.len <= 1) break;
             }
             continue;
         }
 
         var tokens_it = std.mem.tokenizeAny(u8, line, " ,\t");
         const text = tokens_it.next() orelse return error.NoInstructionOnLine;
+
         if (line[0] == '%') {
             const val = tokens_it.next() orelse return error.NoValueGiven;
             const parsed = try std.fmt.parseInt(u64, val, 0);
             try self.references.put(text, parsed);
             continue;
         }
+
         if (line[0] == '_' or line[0] == '.') {
             if (self.instructions.items.len % 2 != 0) {
                 const padding = try Instruction.fromToken("nop", 0, 0);
@@ -124,6 +130,7 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
             }
             break :blk try std.fmt.parseInt(u64, token, 0);
         };
+
         const source = blk: {
             const token = tokens_it.next() orelse "0";
             errdefer std.debug.print(White ++ "\"{s}\"\n" ++ Reset, .{token});
@@ -144,6 +151,7 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
                 continue;
             }
         } else |_| {}
+
         if (std.fmt.parseInt(u64, text, 0)) |immediate| {
             const last = self.instructions.getLast();
             if (last.task.operation == .LI64) {
@@ -158,7 +166,9 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
                 continue;
             }
         } else |_| {}
+
         const instruction = try Instruction.fromToken(text, @truncate(dest), @truncate(source));
+
         switch (instruction.task.operation) {
             .CALL, .JMP => {
                 if (self.instructions.items.len % 2 == 0) {
@@ -172,6 +182,7 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
         }
         try self.instructions.append(instruction);
     }
+
     for (self.unresolved.items) |ref| {
         errdefer std.debug.print("{s}\n", .{ref.label});
         const jumpaddr = self.references.get(ref.label) orelse return error.NoLabelByThatName;
@@ -180,12 +191,14 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []cons
             .SRC => self.instructions.items[ref.position].source = @intCast(jumpaddr),
         }
     }
+
     if (self.instructions.items.len % 2 != 0) {
         const padding = try Instruction.fromToken("nop", 0, 0);
         try self.instructions.append(padding);
         std.debug.print(WARNING ++ "Consider alignment, avoid nops\n", .{});
         std.debug.print(LINE, .{ filename,line_count+1, 0, "HERE" });
     }
+
     self.start = self.references.get(".start") orelse return error.NoStart;
 }
 

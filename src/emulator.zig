@@ -2,6 +2,8 @@ const std = @import("std");
 const CPU = @import("cpu.zig");
 const assembler = @import("assembler.zig");
 
+
+var cpu = CPU.init();
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -33,10 +35,30 @@ pub fn main() !void {
     const program = try reader.readAllAlloc(allocator, header.size*header.len);
     defer allocator.free(program);
 
-    var cpu = CPU.init();
     try cpu.load(program);
     cpu.pc = header.entry;
 
     while (try cpu.fetchDecodeExecute()) |_| {}
     return;
+}
+
+pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+    std.debug.print("CPU Exception: {s}\n", .{msg});
+    std.debug.print("Registers:\n", .{});
+    var i: usize = 1;
+    for (cpu.registers,0..) |register, j| {
+        if (i % 5 == 0) std.debug.print("\n", .{});
+        if (register == 0) continue;
+        std.debug.print("REG{d:0>3}: 0x{x:0>16}    ", .{j,register});
+        i += 1;
+    }
+    std.debug.print("\nMemory:\n", .{});
+    for (cpu.memory) |memory| {
+        if (memory == 0) continue;
+        if (i % 5 == 0) std.debug.print("\n", .{});
+        std.debug.print("0x{x:0>16}    ", .{memory});
+        i += 1;
+    }
+    std.debug.print("\n", .{});
+    std.builtin.default_panic(msg, error_return_trace, ret_addr);
 }

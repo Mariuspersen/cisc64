@@ -1,15 +1,13 @@
 %STDOUT 0x1
 %STDIN 0x0
 %REG1 0x0
+%REG2 0x1
 
 .start
 spi
-movv    0x10, 0x41
-movv    0x11, 0x42
-cmpr    0x11, 0x10
-outre    %STDOUT, 0x10
-pushr   0x10
-outr    %STDOUT, 0x11
-popr    0x11
-outr    %STDOUT, 0x11
+li64 %REG1
+0x6E6172766870655A
+pushr %REG1
+popr %REG2
+outr %STDOUT, %REG2
 hlt
