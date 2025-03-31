@@ -33,7 +33,7 @@
 
 .move_disk
     bfsr %LSB, %SRC_PEG
-    bc %SRC_PEG, %LSB
+    bcr %SRC_PEG, %LSB
     bfsr %LSB, %DEST_PEG
-    bs %DEST_PEG, %LSB
+    bsr %DEST_PEG, %LSB
     ret
