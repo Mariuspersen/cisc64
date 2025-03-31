@@ -16,4 +16,3 @@
     spi
     calli .hello
     hlt
-    hlt

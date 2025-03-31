@@ -1,7 +1,6 @@
 const std = @import("std");
 const CPU = @import("cpu.zig");
 const assembler = @import("assembler.zig");
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();

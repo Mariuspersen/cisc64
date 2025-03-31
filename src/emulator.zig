@@ -42,23 +42,26 @@ pub fn main() !void {
     return;
 }
 
-pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
-    std.debug.print("CPU Exception: {s}\n", .{msg});
-    std.debug.print("Registers:\n", .{});
+pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("CPU Exception: {s}\n", .{msg}) catch {};
+    stderr.print("Registers:\n", .{}) catch {};
     var i: usize = 1;
     for (cpu.registers,0..) |register, j| {
-        if (i % 5 == 0) std.debug.print("\n", .{});
+        if (i % 5 == 0) stderr.print("\n", .{}) catch {};
         if (register == 0) continue;
-        std.debug.print("REG{d:0>3}: 0x{x:0>16}    ", .{j,register});
+        stderr.print("REG{d:0>3}: 0x{x:0>16}    ", .{j,register}) catch {};
         i += 1;
     }
-    std.debug.print("\nMemory:\n", .{});
+    stderr.print("\nMemory:\n", .{}) catch {};
     for (cpu.memory) |memory| {
         if (memory == 0) continue;
-        if (i % 5 == 0) std.debug.print("\n", .{});
-        std.debug.print("0x{x:0>16}    ", .{memory});
+        if (i % 5 == 0) stderr.print("\n", .{}) catch {};
+        stderr.print("0x{x:0>16}    ", .{memory}) catch {};
         i += 1;
     }
-    std.debug.print("\n", .{});
-    std.builtin.default_panic(msg, error_return_trace, ret_addr);
+    stderr.print("\n", .{}) catch {};
+    std.debug.defaultPanic(msg, ret_addr);
 }

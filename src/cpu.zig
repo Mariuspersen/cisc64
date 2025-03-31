@@ -139,7 +139,7 @@ pub const Instruction = packed struct {
         ins.destination = dest;
         ins.source = source;
         var OTLen: usize = 0;
-        inline for (OPInfo.Enum.fields) |field| {
+        inline for (OPInfo.@"enum".fields) |field| {
             if (std.ascii.startsWithIgnoreCase(text, field.name)) {
                 ins.task.operation = @field(OP, field.name);
                 OTLen = field.name.len;
@@ -375,7 +375,7 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                 };
                 const info = @typeInfo(Register);
                 const writer = (std.fs.File{ .handle = handle }).writer();
-                const intermediate: [@divExact(info.Int.bits, 8)]u8 = @bitCast(val);
+                const intermediate: [@divExact(info.@"int".bits, 8)]u8 = @bitCast(val);
                 for (intermediate) |value| {
                     if (value == 0) break;
                     try writer.writeByte(value);
@@ -428,7 +428,7 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
             .TEST => {
                 flags.zero = val == 0;
                 const T = @TypeOf(dest.*);
-                const TBits = std.meta.Int(.unsigned, @typeInfo(T).Int.bits);
+                const TBits = std.meta.Int(.unsigned, @typeInfo(T).@"int".bits);
                 flags.sign = @as(TBits, @bitCast(dest.*)) >> (@bitSizeOf(T) - 1) != 0;
             },
             .SWAP => {
