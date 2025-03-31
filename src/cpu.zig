@@ -1,4 +1,5 @@
 const std = @import("std");
+const ISA = @import("isa.zig");
 const testing = std.testing;
 
 const Self = @This();
@@ -23,18 +24,7 @@ const Self = @This();
 //Wait is this just a GPU at this point?
 //A General Processing Unit?
 //Hmmmmmm
-
-const Flag = u1;
-const Register = u64;
-pub const Endian = std.builtin.Endian.little;
-
-//Some addresses to named registers
-const REMAINDER = 0xFF - 1;
-const FLAGS_ADDR = 0xFF - 2;
-const SP = 0xFF - 3;
-const Stack = 0xFF - 4;
-
-const IMMEDIATE_TYPE = enum(u2) {
+pub const IMMEDIATE_TYPE = enum(u2) {
     NONE,
     SHORT,
     WORD,
@@ -55,143 +45,16 @@ const FLAGSR = packed struct {
     _: u53,
 };
 
-//I think in the future the way this sure work is a Instruction is 2 bytes, the first byte is the conditional,
-//it reads the flags and checks if should or should execute or skip the instruction
+const Register = u64;
+pub const Endian = std.builtin.Endian.little;
 
-//For example maybe 0x0 means no conditional, so it executes the next instruction regardless
-//If the conditional byte is 0x1, which is the eql flag, check the eql flag, if set execute instruction, otherwise skip
+//Some addresses to named registers
+const REMAINDER = 0xFF - 1;
+const FLAGS_ADDR = 0xFF - 2;
+const SP = 0xFF - 3;
+const Stack = 0xFF - 4;
 
-const Conditional = packed struct {
-    zero: bool,
-    equal: bool,
-    greater: bool,
-    lower: bool,
-    carry: bool,
-    sign: bool,
-    overflow: bool,
-    parity: bool,
-};
-
-const FT = enum(u2) {
-    REGISTER,
-    TO_MEMORY,
-    FROM_MEMORY,
-    IMMEDIATE,
-};
-
-const OP = enum(u6) {
-    HLT,
-    NOP,
-    ADD,
-    SUB,
-    INC,
-    DEC,
-    XOR,
-    OR,
-    AND,
-    MUL,
-    DIV,
-    SQRT,
-    SR,
-    SL,
-    ITF, //Int to float,
-    FTI, //Float to int,
-    FADD,
-    FSUB,
-    FMUL,
-    FDIV,
-    FSQRT,
-    JMP,
-    MOV,
-    CMP,
-    SPI,
-    RET,
-    POP,
-    CALL,
-    PUSH,
-    TEST,
-    SWAP, //Swap Endianess
-    BSF, // Bit Scan Forward (find first set bit)
-    BSR, // Bit Scan Reverse (find last set bit)
-    BTS, // Bit Test and Set
-    BTR, // Bit Test and Reset
-    XCHG, // Exchange values of two registers
-    OUT,
-    LI32, //Load Immediate Word
-    LI64, //Load Immediate Long
-    IN,
-};
-
-const Task = packed struct {
-    fetch: FT, //Fetch type, value,register,memory
-    operation: OP, //What actually is being executed
-};
-
-pub const Instruction = packed struct {
-    condition: Conditional,
-    task: Task,
-    destination: u8,
-    source: u8,
-
-    pub fn fromToken(text: []const u8, dest: u8, source: u8) !Instruction {
-        const OPInfo = @typeInfo(OP);
-        var ins = std.mem.zeroInit(Instruction, .{});
-        ins.destination = dest;
-        ins.source = source;
-        var OTLen: usize = 0;
-        inline for (OPInfo.@"enum".fields) |field| {
-            if (std.ascii.startsWithIgnoreCase(text, field.name)) {
-                ins.task.operation = @field(OP, field.name);
-                OTLen = field.name.len;
-            }
-        }
-        if (OTLen == 0) return error.InvalidInstruction;
-        if (text.len == OTLen) return ins;
-        ins.task.fetch = switch (text[OTLen]) {
-            'T', 't' => .TO_MEMORY,
-            'F', 'f' => .FROM_MEMORY,
-            'R', 'r' => .REGISTER,
-            'I', 'i' => .IMMEDIATE,
-            else => blk: {
-                OTLen -= 1;
-                break :blk .IMMEDIATE;
-            },
-        };
-        OTLen += 1;
-        switch (ins.task.operation) {
-            .CALL, .RET, .JMP => {
-                if (text.len != OTLen) {
-                    std.debug.print("Instructions that modify program counter cannot have conditionals!\n", .{});
-                    return error.ConditionalOnJump;
-                }
-            },
-            else => {}
-        }
-        for (text[OTLen..]) |c| switch (c) {
-            'Z', 'z' => ins.condition.zero = true,
-            'E', 'e' => ins.condition.equal = true,
-            'G', 'g' => ins.condition.greater = true,
-            'L', 'l' => ins.condition.lower = true,
-            'C', 'c' => ins.condition.carry = true,
-            'S', 's' => ins.condition.sign = true,
-            'O', 'o' => ins.condition.overflow = true,
-            'P', 'p' => ins.condition.parity = true,
-            else => {
-                std.debug.print("{c} is not a valid flag, ignoring...\n", .{c});
-            },
-        };
-
-        return ins;
-    }
-
-    pub fn fetch(value: u64) [2]Instruction {
-        return @bitCast(value);
-    }
-
-    pub fn toString(self: *const Instruction) [@sizeOf(Instruction)]u8 {
-        return @bitCast(self.*);
-    }
-};
+const Instruction = ISA.Instruction;
 
 pub fn fetchDecodeExecute(self: *Self) !?void {
     //Fetch
@@ -239,9 +102,9 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
             else => if (r and c) {} else if (r or c) continue,
             .JMP, .CALL, .RET => if (insConditions != 0) return error.ConditionalOnJump,
         }
-
         //Execute
-        switch (instruction.task.operation) {
+        switch (instruction.task.operation) 
+        {
             .ADD => {
                 const result = @addWithOverflow(dest.*, val);
                 dest.* = result[0];
@@ -250,25 +113,20 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
             .AND => {
                 dest.* &= val;
             },
-            .BSF => {
+            .BFS => {
                 dest.* = @ctz(val);
             },
-            .BSR => {
+            .BRS => {
                 dest.* = @clz(val);
             },
-            .BTS => {
-                const truth = dest.* >> @intCast(val) & 1 == 1;
-                flags.carry = truth;
-                if (!truth) {
-                    dest.* |= std.math.shl(u64, 1, val);
-                }
+            .BT => {
+                flags.carry = dest.* >> @intCast(val) & 1 == 1;
             },
-            .BTR => {
-                const truth = dest.* >> @intCast(val) & 1 == 1;
-                flags.carry = truth;
-                if (!truth) {
-                    dest.* &= ~(std.math.shl(u64, 1, val));
-                }
+            .BS => {
+                dest.* |= std.math.shl(u64, 1, val);
+            },
+            .BC => {
+                dest.* &= ~(std.math.shl(u64, 1, val));
             },
             .CALL => {
                 const offset = self.registers[SP];

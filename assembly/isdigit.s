@@ -17,6 +17,7 @@
 .start
     spi
     ini %STDIN, %REG1
+    nop
     calli .isDigit
     outf %REG2, %STDOUT
     hlt

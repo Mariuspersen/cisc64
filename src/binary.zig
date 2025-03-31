@@ -1,5 +1,6 @@
 const std = @import("std");
 const CPU = @import("cpu.zig");
+const ISA = @import("isa.zig");
 const assembler = @import("assembler.zig");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -35,7 +36,7 @@ pub fn main() !void {
     const header = assembler.Header{
         .entry = a.start,
         .len = a.instructions.items.len,
-        .size = @sizeOf(CPU.Instruction),
+        .size = @sizeOf(ISA.Instruction),
     };
 
     try writer.writeStructEndian(header, CPU.Endian);

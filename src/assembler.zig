@@ -1,8 +1,9 @@
 const std = @import("std");
 const CPU = @import("cpu.zig");
+const ISA = @import("isa.zig");
 
 const Allocator = std.mem.Allocator;
-const Instruction = CPU.Instruction;
+const Instruction = ISA.Instruction;
 const BackingInt = @typeInfo(Instruction).Enum.tag_type;
 const Self = @This();
 

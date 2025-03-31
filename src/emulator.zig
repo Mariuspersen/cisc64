@@ -39,7 +39,6 @@ pub fn main() !void {
     cpu.pc = header.entry;
 
     while (try cpu.fetchDecodeExecute()) |_| {}
-    return;
 }
 
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
