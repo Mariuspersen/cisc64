@@ -7,33 +7,53 @@
 %TEMP 6
 
 .start
-    spi
     movi %NUM_DISK, 2
-    movi %SRC_PEG, 0b011
-    movi %DEST_PEG, 0b000
-    movi %AUX_PEG, 0b000
-    calli .hanoi
-    hlt
+    movi %SRC_PEG, 0b11
+    movi %DEST_PEG, 0b00
+    movi %AUX_PEG, 0b00
 
-.hanoi
-    cmpi %NUM_DISK, 1
-    movi %JMP_REG, .not_one
-    moviel %JMP_REG, .move_disk
-    jmpr %JMP_REG
-.not_one
-    movi %AUX_PEG, 6
-    subr %AUX_PEG, %SRC_PEG
-    subr %AUX_PEG, %DEST_PEG
-    pushr %AUX_PEG
+    pushr %NUM_DISK
     pushr %SRC_PEG
     pushr %DEST_PEG
-
-    decr %NUM_DISK
+    pushr %AUX_PEG
     calli .hanoi
+
+.hanoi
+    popr %JMP_REG
+    popr %AUX_PEG
+    popr %DEST_PEG
+    popr %SRC_PEG
+    popr %NUM_DISK
+    pushr %JMP_REG
+
+    testr %NUM_DISK
+    movi %JMP_REG, .not_last
+    moviz %JMP_REG, .last_disk
+.not_last
+    decr %NUM_DISK
+    pushr %NUM_DISK
+    pushr %SRC_PEG
+    pushr %AUX_PEG
+    pushr %DEST_PEG
+
+    calli .hanoi
+    calli .move_disk
+
+    pushr %NUM_DISK
+    pushr %DEST_PEG
+    pushr %SRC_PEG
+    pushr %AUX_PEG
+    calli .hanoi
+
+.last_disk
+    popr %AUX_PEG
+    popr %DEST_PEG
+    popr %SRC_PEG
+    popr %NUM_DISK
+    ret
 
 .move_disk
     bfsr %LSB, %SRC_PEG
-    bcr %SRC_PEG, %LSB
+    bcr  %SRC_PEG, %LSB
     bfsr %LSB, %DEST_PEG
-    bsr %DEST_PEG, %LSB
-    ret
+    bsr  %DEST_PEG, %LSB 

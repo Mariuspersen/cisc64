@@ -101,6 +101,9 @@ pub fn assemblyToMachineCode(self: *Self, filename: []const u8, assembly: []u8) 
         var tokens_it = std.mem.tokenizeAny(u8, line, " ,\t");
         const text = tokens_it.next() orelse return error.NoInstructionOnLine;
 
+        //Line is a comment, ignore
+        if (std.ascii.startsWithIgnoreCase(text, "//")) continue;
+
         if (line[0] == '%') {
             const val = tokens_it.next() orelse return error.NoValueGiven;
             const parsed = try std.fmt.parseInt(u64, val, 0);
