@@ -36,7 +36,7 @@ pub fn main() !void {
     defer allocator.free(program);
 
     try cpu.load(program);
-    cpu.pc = header.entry;
+    cpu.setPC(header.entry);
 
     while (try cpu.fetchDecodeExecute()) |_| {}
 }

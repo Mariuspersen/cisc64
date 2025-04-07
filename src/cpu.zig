@@ -49,16 +49,17 @@ const Register = u64;
 pub const Endian = std.builtin.Endian.little;
 
 //Some addresses to named registers
-const REMAINDER = 0xFF - 1;
-const FLAGS_ADDR = 0xFF - 2;
-const SP = 0xFF - 3;
-const Stack = 0xFF - 4;
+const PC = 0xFF - 1;
+const REMAINDER = 0xFF - 2;
+const FLAGS_ADDR = 0xFF - 3;
+const SP = 0xFF - 4;
+const Stack = 0xFF - 5;
 
 const Instruction = ISA.Instruction;
 
 pub fn fetchDecodeExecute(self: *Self) !?void {
     //Fetch
-    const bundle = Instruction.fetch(self.memory[self.pc]);
+    const bundle = Instruction.fetch(self.memory[self.registers[PC]]);
     var flags: *FLAGSR = @ptrCast(&self.registers[FLAGS_ADDR]);
     //Decode
     for (bundle) |instruction| {
@@ -76,7 +77,7 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
             self.registers[top] = switch (flags.value) {
                 .WORD, .SHORT => @as(u32, @bitCast(instruction)),
                 .LONG => @bitCast(bundle),
-                .NONE => break,
+                .NONE => 0,
             };
             flags.value = .NONE;
             break;
@@ -130,9 +131,9 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
             },
             .CALL => {
                 const offset = self.registers[SP];
-                self.registers[offset] = self.pc;
+                self.registers[offset] = self.registers[PC];
                 self.registers[SP] -= 1;
-                self.pc = switch (instruction.task.fetch) {
+                self.registers[PC] = switch (instruction.task.fetch) {
                     .IMMEDIATE => destination,
                     else => dest.*,
                 };
@@ -198,7 +199,7 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
                 dest.* = @bitCast(valF);
             },
             .JMP => {
-                self.pc = switch (instruction.task.fetch) {
+                self.registers[PC] = switch (instruction.task.fetch) {
                     .IMMEDIATE => destination,
                     else => dest.*,
                 };
@@ -264,7 +265,7 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
             .RET => {
                 self.registers[SP] += 1;
                 const offset = self.registers[SP];
-                self.pc = self.registers[offset] + 1;
+                self.registers[PC] = self.registers[offset] + 1;
                 return;
             },
             .SL => {
@@ -308,18 +309,20 @@ pub fn fetchDecodeExecute(self: *Self) !?void {
             },
         }
     }
-    self.pc += 1;
+    self.registers[PC] += 1;
 }
 
-pc: u64 = 0,
 registers: [std.math.maxInt(u8)]Register,
 memory: [1024]u64 = undefined,
 
 pub fn init() Self {
     return .{
-        .pc = 0,
         .registers = std.mem.zeroes([std.math.maxInt(u8)]Register),
     };
+}
+
+pub fn setPC(self: *Self, val: u64) void {
+    self.registers[PC] = val;
 }
 
 pub fn load(self: *Self, bin: []u8) !void {

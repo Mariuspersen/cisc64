@@ -1,11 +1,5 @@
 const std = @import("std");
 
-//I think in the future the way this sure work is a Instruction is 2 bytes, the first byte is the conditional,
-//it reads the flags and checks if should or should execute or skip the instruction
-
-//For example maybe 0x0 means no conditional, so it executes the next instruction regardless
-//If the conditional byte is 0x1, which is the eql flag, check the eql flag, if set execute instruction, otherwise skip
-
 const Conditional = packed struct {
     zero: bool,
     equal: bool,
@@ -49,7 +43,7 @@ const OP = enum(u6) {
     JMP,
     MOV,
     CMP,
-    SPI,
+    SPI, //Stack Pointer Init
     RET,
     POP,
     CALL,
@@ -69,13 +63,236 @@ const OP = enum(u6) {
 };
 
 const Task = packed struct {
-    fetch: FT, //Fetch type, value,register,memory
     operation: OP, //What actually is being executed
+    fetch: FT, //Fetch type, value,register,memory
+};
+
+pub const JumpImmediate = packed struct {
+    operation: OP,
+    dest: u26
+};
+
+pub const NoFetchConditionalTwoArg = packed struct {
+    operation: OP,
+    condition: Conditional,
+    dest: u8,
+    src: u10,
+};
+
+pub const NoFetchConditionalOneArg = packed struct {
+    operation: OP,
+    condition: Conditional,
+    dest: u18,
+};
+
+pub const NoFetchNoConditionalTwoArg = packed struct {
+    operation: OP,
+    dest: u8,
+    src: u18,
+};
+
+pub const NoFetchNoConditionalOneArg = packed struct {
+    operation: OP,
+    dest: u26,
+};
+
+pub const FetchNoConditionalTwoArg = packed struct {
+    operation: OP,
+    fetch: FT,
+    dest: u8,
+    src: u16,
+};
+
+pub const FetchNoConditionalOneArg = packed struct {
+    operation: OP,
+    fetch: FT,
+    dest: u24,
+};
+
+pub const FetchConditionalOneArg = packed struct {
+    operation: OP,
+    fetch: FT,
+    condition: Conditional,
+    dest: u16,
+};
+
+pub const FetchConditionalTwoArg = packed struct {
+    operation: OP,
+    fetch: FT,
+    condition: Conditional,
+    dest: u8,
+    src: u8,
+};
+
+comptime {
+    if (@bitSizeOf(FetchConditionalOneArg) != 32) @compileError("Not correct instruction size");
+    if (@bitSizeOf(FetchConditionalTwoArg) != 32) @compileError("Not correct instruction size");
+    if (@bitSizeOf(FetchNoConditionalOneArg) != 32) @compileError("Not correct instruction size");
+    if (@bitSizeOf(FetchNoConditionalTwoArg) != 32) @compileError("Not correct instruction size");
+    if (@bitSizeOf(NoFetchNoConditionalOneArg) != 32) @compileError("Not correct instruction size");
+    if (@bitSizeOf(NoFetchNoConditionalTwoArg) != 32) @compileError("Not correct instruction size");
+    if (@bitSizeOf(NoFetchConditionalOneArg) != 32) @compileError("Not correct instruction size");
+    if (@bitSizeOf(NoFetchConditionalTwoArg) != 32) @compileError("Not correct instruction size");
+
+}
+
+const _Instruction = packed union {
+    jump: JumpImmediate,
+    fcoa: FetchConditionalOneArg,
+    fcta: FetchConditionalTwoArg,
+    fncoa: FetchNoConditionalOneArg,
+    fncta: FetchNoConditionalTwoArg,
+    nfcoa: NoFetchConditionalOneArg,
+    nfcta: NoFetchConditionalTwoArg,
+    nfncoa: NoFetchNoConditionalOneArg,
+    nfncta: NoFetchNoConditionalTwoArg,
+
+    pub fn fromToken(text: []const u8, dest: u26, source: ?u18) !_Instruction {
+        var operation: OP = .NOP;
+        var fetch: ?FT = null;
+        var condition: ?Conditional = null;
+        var OTLen: usize = 0;
+        inline for (@typeInfo(OP).@"enum".fields) |field| {
+            if (std.ascii.startsWithIgnoreCase(text, field.name)) {
+                operation = @field(OP, field.name);
+                OTLen = field.name.len;
+            }
+        }
+        if (OTLen == 0) return error.InvalidInstruction;
+        fetch = switch (text[OTLen]) {
+            'T', 't' => .TO_MEMORY,
+            'F', 'f' => .FROM_MEMORY,
+            'R', 'r' => .REGISTER,
+            'I', 'i' => .IMMEDIATE,
+            else => blk: {
+                OTLen -= 1;
+                break :blk null;
+            },
+        };
+        OTLen += 1;
+        switch (operation) {
+            .CALL, .RET, .JMP => {
+                if (text.len != OTLen) {
+                    std.debug.print("Instructions that modify program counter cannot have conditionals!\n", .{});
+                    return error.ConditionalOnJump;
+                }
+            },
+            else => {}
+        }
+        for (text[OTLen..]) |c| switch (c) {
+            'Z', 'z' => condition.zero = true,
+            'E', 'e' => condition.equal = true,
+            'G', 'g' => condition.greater = true,
+            'L', 'l' => condition.lower = true,
+            'C', 'c' => condition.carry = true,
+            'S', 's' => condition.sign = true,
+            'O', 'o' => condition.overflow = true,
+            'P', 'p' => condition.parity = true,
+            else => {
+                std.debug.print("{c} is not a valid flag, ignoring...\n{s}\n", .{c,text});
+            },
+        };
+        switch (operation) {
+            .JMP, .CALL => {
+                return .{
+                    .jump = .{
+                        .operation = operation,
+                        .dest = dest,
+                    }
+                };
+            },
+            else => {
+                if (fetch) |f| {
+                    if (condition) |c| {
+                        if (source) |s| {
+                            return .{
+                                .fcta = .{
+                                    .operation = operation,
+                                    .fetch = f,
+                                    .condition = c,
+                                    .dest = @intCast(dest),
+                                    .src = @intCast(s),
+                                }
+                            };
+                        } else {
+                             return .{
+                                .fcoa = .{
+                                    .operation = operation,
+                                    .fetch = f,
+                                    .condition = c,
+                                    .dest = @intCast(dest),
+                                }
+                            };
+                        }
+                    } else {
+                        if (source) |s| {
+                            return .{
+                                .fncta = .{
+                                    .operation = operation,
+                                    .fetch = f,
+                                    .dest = @intCast(dest),
+                                    .src = @intCast(s),
+                                }
+                            };
+                        }
+                        else {
+                            return .{
+                                .fncoa = .{
+                                    .operation = operation,
+                                    .fetch = f,
+                                    .dest = @intCast(dest),
+                                }
+                            };
+                        }
+                    }
+                } else {
+                    if (condition) |c| {
+                        if (source) |s| {
+                            return .{
+                                .nfcta = .{
+                                    .operation = operation,
+                                    .condition = c,
+                                    .dest = @intCast(dest),
+                                    .src = @intCast(s),
+                                }
+                            };
+                        } else {
+                             return .{
+                                .nfcoa = .{
+                                    .operation = operation,
+                                    .condition = c,
+                                    .dest = @intCast(dest),
+                                }
+                            };
+                        }
+                    } else {
+                        if (source) |s| {
+                            return .{
+                                .nfncta = .{
+                                    .operation = operation,
+                                    .dest = @intCast(dest),
+                                    .src = @intCast(s),
+                                }
+                            };
+                        }
+                        else {
+                            return .{
+                                .nfncoa = .{
+                                    .operation = operation,
+                                    .dest = @intCast(dest),
+                                }
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
 };
 
 pub const Instruction = packed struct {
-    condition: Conditional,
     task: Task,
+    condition: Conditional,
     destination: u8,
     source: u8,
 
